@@ -1,20 +1,22 @@
 # Карта модулей проекта
 
-Создана минимальная запускаемая Python-основа с безопасным слоем конфигурации и минимальным read-only подключением к Telegram Bot API. Commit `dd7edd14732fe08950569bab369ba35828341220` независимо проверен в GitHub. Реальный запуск нового кода с токеном, временно загруженным из `/root/.config/weather-alert-bot/env`, завершился успешно: Telegram подтвердил бота `@weather_storm_alert_bot` с ID `8980247554`; токен в вывод не попал. Polling, обработка команд, внешние погодные API, база данных, планировщик и рассылки ещё не добавлены.
+Исходная точка задачи — commit `c7bebabfe61bbd5ae193fdb728369d97d0259166`. В этой задаче добавлен безопасный одноразовый сценарий `/start` на стандартной библиотеке Python. Настоящий токен Codex не читался; реальный запуск обработчика и отправка сообщения ещё не выполнялись.
 
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/__init__.py` | Обозначает каталог как Python-пакет | created | Не запускает интеграции |
-| `src/weather_alert_bot/app.py` | Содержит функцию `main()`, минимальный вывод и `--check-telegram` | updated | Без аргументов сохраняет прежний вывод; проверка не запускает polling; реальный запуск завершился успешно |
-| `src/weather_alert_bot/__main__.py` | Поддерживает запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
-| `src/weather_alert_bot/config.py` | Содержит неизменяемые `Settings`, ошибку `ConfigError` и загрузчик `load_settings()` | created | Читает токен только из окружения и скрывает его из `repr` |
-| `src/weather_alert_bot/telegram_api.py` | Содержит `TelegramClient`, `TelegramBotIdentity` и `TelegramApiError` | created | Только `getMe`; токен не попадает в `repr` и тексты ошибок |
-| `tests/` | Содержит автоматические проверки проекта | created | Используется только стандартный `unittest` |
-| `tests/test_smoke.py` | Проверяет код возврата и точный текст минимального запуска | created | Внешние сервисы не используются |
-| `tests/test_config.py` | Проверяет загрузку, обязательность и безопасное представление настройки токена | created | Используется только ненастоящее тестовое значение |
-| `tests/test_telegram_api.py` | Проверяет client и `--check-telegram` | created | Автоматические проверки используют mock-ответы; реальный runtime отдельно подтвердил связь с Telegram Bot API |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram` и `--wait-for-start` | updated | Два Telegram-режима взаимоисключающие; обычный запуск сохранён |
+| `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
+| `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
+| `src/weather_alert_bot/telegram_api.py` | `TelegramClient`, модели данных и безопасный API-слой | updated | Поддерживает `getUpdates`, `sendMessage` и прежний `getMe` |
+| `src/weather_alert_bot/start_handler.py` | Однократное ожидание новой приватной `/start` | created | Очищает старые обновления, отвечает один раз и завершается |
+| `tests/` | Автоматические проверки проекта | updated | Используются только стандартный `unittest` и mock |
+| `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
+| `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
+| `tests/test_telegram_api.py` | `getMe`, `getUpdates`, `sendMessage` и ошибки | updated | HTTP вызывается только через mock |
+| `tests/test_start_handler.py` | Очистка очереди, фильтрация, offset и остановка | created | Проверяет один ответ и `Ctrl+C` без traceback |
 
-## Зафиксированный runtime-факт
+## Текущие границы реализации
 
-Во временной подсессии на сервере была выполнена команда `--check-telegram` с токеном, загруженным из файла вне Git. Команда завершилась успешно. Telegram подтвердил бота `@weather_storm_alert_bot` с ID `8980247554` и именем `Погода и магнитные бури`. Токен не появился в выводе. Polling и отправка сообщений не выполнялись.
+- Погодная логика, NOAA, SQLite, выбор города, расписание, рассылки, постоянный polling, webhook и systemd не добавлены.
+- Реальный запуск нового обработчика с Telegram ещё не выполнялся.

@@ -5,6 +5,9 @@ from unittest.mock import patch
 from weather_alert_bot.config import ConfigError, Settings, load_settings
 
 
+TEST_TOKEN = "123456789:TEST_TOKEN_NOT_REAL"
+
+
 class LoadSettingsTest(unittest.TestCase):
     def test_missing_optional_token_returns_none(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -21,16 +24,14 @@ class LoadSettingsTest(unittest.TestCase):
                 self.assertIsNone(settings.telegram_bot_token)
 
     def test_token_is_read_and_trimmed(self) -> None:
-        test_token = "test-token-not-real-12345"
-
         with patch.dict(
             os.environ,
-            {"TELEGRAM_BOT_TOKEN": f"  {test_token}  "},
+            {"TELEGRAM_BOT_TOKEN": f"  {TEST_TOKEN}  "},
             clear=True,
         ):
             settings = load_settings()
 
-        self.assertEqual(settings.telegram_bot_token, test_token)
+        self.assertEqual(settings.telegram_bot_token, TEST_TOKEN)
 
     def test_missing_required_token_raises_exact_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -41,16 +42,14 @@ class LoadSettingsTest(unittest.TestCase):
                 load_settings(require_telegram_token=True)
 
     def test_settings_repr_hides_token(self) -> None:
-        test_token = "test-token-not-real-12345"
+        settings_repr = repr(Settings(telegram_bot_token=TEST_TOKEN))
 
-        settings_repr = repr(Settings(telegram_bot_token=test_token))
-
-        self.assertNotIn(test_token, settings_repr)
+        self.assertNotIn(TEST_TOKEN, settings_repr)
 
     def test_loader_does_not_change_environment(self) -> None:
         with patch.dict(
             os.environ,
-            {"TELEGRAM_BOT_TOKEN": "  test-token-not-real-12345  "},
+            {"TELEGRAM_BOT_TOKEN": f"  {TEST_TOKEN}  "},
             clear=True,
         ):
             environment_before = dict(os.environ)
