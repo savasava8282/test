@@ -13,7 +13,7 @@ class SmokeTest(unittest.TestCase):
 
         with patch.dict(os.environ, {}, clear=True):
             with redirect_stdout(output):
-                return_code = main()
+                return_code = main([])
 
         self.assertEqual(return_code, 0)
         self.assertEqual(output.getvalue(), "Каркас погодного бота готов.\n")
