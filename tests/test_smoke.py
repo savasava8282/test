@@ -74,10 +74,16 @@ class SmokeTest(unittest.TestCase):
         handler.assert_called_once_with(client_type.return_value)
 
     def test_telegram_modes_are_mutually_exclusive(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            main(["--check-telegram", "--wait-for-start"])
-
-        self.assertEqual(raised.exception.code, 2)
+        for arguments in (
+            ["--check-telegram", "--wait-for-start"],
+            ["--check-telegram", "--geocode-city", "Москва"],
+            ["--wait-for-start", "--geocode-city", "Москва"],
+            ["--wait-for-city", "--geocode-city", "Москва"],
+        ):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(SystemExit) as raised:
+                    main(arguments)
+                self.assertEqual(raised.exception.code, 2)
 
     def test_help_contains_wait_for_city(self) -> None:
         output = io.StringIO()
@@ -88,6 +94,7 @@ class SmokeTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--wait-for-city", output.getvalue())
+        self.assertIn("--geocode-city CITY", output.getvalue())
 
         with self.assertRaises(SystemExit) as raised:
             main(["--wait-for-start", "--wait-for-city"])

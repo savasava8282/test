@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from weather_alert_bot.city_handler import run_until_city
 from weather_alert_bot.config import ConfigError, load_settings
+from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.start_handler import run_until_start
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient
 
@@ -27,6 +28,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="дождаться новой /start и одного названия города",
     )
+    telegram_group.add_argument(
+        "--geocode-city",
+        metavar="CITY",
+        help="однократно найти город через Open-Meteo",
+    )
     args = parser.parse_args(argv)
 
     if args.check_telegram:
@@ -35,6 +41,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_start()
     if args.wait_for_city:
         return _wait_for_city()
+    if args.geocode_city is not None:
+        return _geocode_city(args.geocode_city)
 
     load_settings(require_telegram_token=False)
     print("Каркас погодного бота готов.")
@@ -82,4 +90,29 @@ def _check_telegram() -> int:
     print(f"ID бота: {identity.id}")
     print(f"Username: @{identity.username}")
     print(f"Имя: {identity.first_name}")
+    return 0
+
+
+def _geocode_city(city: str) -> int:
+    try:
+        locations = OpenMeteoGeocodingClient().search(city.strip())
+    except GeocodingError as exc:
+        print(f"Ошибка геокодирования: {exc}", file=sys.stderr)
+        return 1
+
+    if not locations:
+        print("Подходящие города не найдены.")
+        return 2
+
+    print("Найденные варианты:")
+    for index, location in enumerate(locations[:5], start=1):
+        place_parts = [location.name]
+        if location.admin1:
+            place_parts.append(location.admin1)
+        place_parts.append(location.country)
+        print(
+            f"{index}. {', '.join(place_parts)} — "
+            f"{location.latitude:.6f}, {location.longitude:.6f} — {location.timezone}"
+        )
+    print("Источник геокодирования: Open-Meteo; данные о локациях: GeoNames.")
     return 0
