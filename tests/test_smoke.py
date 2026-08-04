@@ -46,9 +46,51 @@ class SmokeTest(unittest.TestCase):
         client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
         handler.assert_called_once_with(client_type.return_value)
 
+    def test_wait_for_city_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-city"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка ожидания города", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_city_uses_mock_client(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.run_until_city", return_value=0) as handler:
+                    return_code = main(["--wait-for-city"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        handler.assert_called_once_with(client_type.return_value)
+
     def test_telegram_modes_are_mutually_exclusive(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             main(["--check-telegram", "--wait-for-start"])
+
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_help_contains_wait_for_city(self) -> None:
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as raised:
+                main(["--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("--wait-for-city", output.getvalue())
+
+        with self.assertRaises(SystemExit) as raised:
+            main(["--wait-for-start", "--wait-for-city"])
 
         self.assertEqual(raised.exception.code, 2)
 
