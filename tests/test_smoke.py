@@ -1,11 +1,12 @@
 import io
 import os
 import unittest
-from contextlib import redirect_stdout
 from contextlib import redirect_stderr
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from weather_alert_bot.app import main
+from weather_alert_bot.telegram_api import TelegramApiError
 
 
 class SmokeTest(unittest.TestCase):
@@ -105,6 +106,74 @@ class SmokeTest(unittest.TestCase):
         geocoder_type.assert_called_once_with()
         handler.assert_called_once_with(client_type.return_value, geocoder_type.return_value)
 
+    def test_wait_for_confirmed_city_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-confirmed-city"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка ожидания подтверждённого города", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_confirmed_city_creates_both_clients_and_uses_handler(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.OpenMeteoGeocodingClient") as geocoder_type:
+                    with patch(
+                        "weather_alert_bot.app.run_until_confirmed_city",
+                        return_value=0,
+                    ) as handler:
+                        return_code = main(["--wait-for-confirmed-city"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        geocoder_type.assert_called_once_with()
+        handler.assert_called_once_with(client_type.return_value, geocoder_type.return_value)
+
+    def test_wait_for_confirmed_city_handles_telegram_error_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch(
+                "weather_alert_bot.app.run_until_confirmed_city",
+                side_effect=TelegramApiError("https://internal.example chat 42 {\"x\":1}"),
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    return_code = main(["--wait-for-confirmed-city"])
+
+        self.assertEqual(return_code, 1)
+        terminal = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn("Traceback", terminal)
+        self.assertNotIn("https://", terminal)
+        self.assertNotIn("42", terminal)
+        self.assertNotIn("{", terminal)
+
+    def test_wait_for_confirmed_city_is_mutually_exclusive_with_existing_modes(self) -> None:
+        for arguments in (
+            ["--check-telegram", "--wait-for-confirmed-city"],
+            ["--wait-for-start", "--wait-for-confirmed-city"],
+            ["--wait-for-city", "--wait-for-confirmed-city"],
+            ["--wait-for-geocoded-city", "--wait-for-confirmed-city"],
+            ["--wait-for-confirmed-city", "--geocode-city", "Москва"],
+        ):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(SystemExit) as raised:
+                    main(arguments)
+                self.assertEqual(raised.exception.code, 2)
+
     def test_telegram_modes_are_mutually_exclusive(self) -> None:
         for arguments in (
             ["--check-telegram", "--wait-for-start"],
@@ -113,6 +182,7 @@ class SmokeTest(unittest.TestCase):
             ["--wait-for-city", "--geocode-city", "Москва"],
             ["--wait-for-city", "--wait-for-geocoded-city"],
             ["--wait-for-geocoded-city", "--geocode-city", "Москва"],
+            ["--wait-for-confirmed-city", "--geocode-city", "Москва"],
         ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(SystemExit) as raised:
@@ -129,6 +199,7 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--wait-for-city", output.getvalue())
         self.assertIn("--wait-for-geocoded-city", output.getvalue())
+        self.assertIn("--wait-for-confirmed-city", output.getvalue())
         self.assertIn("--geocode-city CITY", output.getvalue())
 
         with self.assertRaises(SystemExit) as raised:

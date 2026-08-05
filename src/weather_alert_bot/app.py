@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from weather_alert_bot.city_handler import run_until_city
 from weather_alert_bot.config import ConfigError, load_settings
+from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
 from weather_alert_bot.start_handler import run_until_start
@@ -35,6 +36,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="дождаться города, проверить его через Open-Meteo и завершиться",
     )
     telegram_group.add_argument(
+        "--wait-for-confirmed-city",
+        action="store_true",
+        help="дождаться города, показать первый результат и получить подтверждение",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -49,6 +55,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_city()
     if args.wait_for_geocoded_city:
         return _wait_for_geocoded_city()
+    if args.wait_for_confirmed_city:
+        return _wait_for_confirmed_city()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -94,6 +102,23 @@ def _wait_for_geocoded_city() -> int:
         return run_until_geocoded_city(telegram_client, geocoding_client)
     except (ConfigError, TelegramApiError) as exc:
         print(f"Ошибка ожидания города с геокодированием: {exc}", file=sys.stderr)
+        return 1
+
+
+def _wait_for_confirmed_city() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        geocoding_client = OpenMeteoGeocodingClient()
+        return run_until_confirmed_city(telegram_client, geocoding_client)
+    except ConfigError as exc:
+        print(f"Ошибка ожидания подтверждённого города: {exc}", file=sys.stderr)
+        return 1
+    except TelegramApiError:
+        print("Ошибка ожидания подтверждённого города.", file=sys.stderr)
         return 1
 
 
