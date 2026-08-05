@@ -19,7 +19,7 @@ from weather_alert_bot.telegram_api import TelegramClient, TelegramUpdate
 
 NO_MATCHES_TEXT = "Подходящие города не найдены. Проверьте название и отправьте город ещё раз."
 GEOCODING_ERROR_TEXT = "Не удалось проверить город через сервис геокодирования. Попробуйте позже."
-CONFIRMATION_TEXT = "Город подтверждён."
+CONFIRMATION_TEXT = "Город подтверждён.\n\nГород пока не сохранён."
 REJECTED_TEXT = "Хорошо. Напишите название другого города."
 UNRECOGNIZED_ANSWER_TEXT = "Не удалось распознать ответ. Напишите «Да» или «Нет»."
 

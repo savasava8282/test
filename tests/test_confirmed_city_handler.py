@@ -85,7 +85,10 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         geocoder.search.assert_called_once_with("Москва", count=5, language="ru")
         self.assertEqual(client.send_message.call_count, 3)
         self.assertEqual(client.send_message.call_args_list[0], call(chat_id=42, text=CITY_PROMPT))
-        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_TEXT))
+        self.assertEqual(
+            client.send_message.call_args_list[-1],
+            call(chat_id=42, text="Город подтверждён.\n\nГород пока не сохранён."),
+        )
         self.assertEqual(
             client.get_updates_calls,
             [
