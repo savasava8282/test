@@ -5,13 +5,14 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city` и `--geocode-city` | updated | Все четыре режима взаимоисключающие; обычный запуск и прежние режимы сохранены |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city` и `--geocode-city` | updated | Все пять режимов взаимоисключающие; обычный запуск и прежние режимы сохранены |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
 | `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
 | `src/weather_alert_bot/telegram_api.py` | `TelegramClient`, модели данных и безопасный API-слой | updated | Поддерживает `getUpdates`, `sendMessage` и прежний `getMe` |
 | `src/weather_alert_bot/start_handler.py` | Однократное ожидание новой приватной `/start` | created | Очищает старые обновления без ответа, отвечает один раз и завершается; сценарий подтверждён контролируемым реальным запуском |
 | `src/weather_alert_bot/city_handler.py` | Однократный запрос и локальная проверка города после новой `/start` | created | Реальный контролируемый запуск подтверждён; не хранит город, не вызывает внешние API, подтверждает один корректный текст и завершается |
+| `src/weather_alert_bot/geocoded_city_handler.py` | Однократный Telegram-сценарий ввода, проверки и геокодирования города | created | Очищает старые обновления, принимает новую приватную `/start`, выполняет один mock-тестируемый запрос и отправляет первый результат без хранения данных |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -19,6 +20,7 @@
 | `tests/test_start_handler.py` | Очистка очереди, фильтрация, offset и остановка | created | Проверяет один ответ и `Ctrl+C` без traceback |
 | `tests/test_city_handler.py` | Сценарий запроса города, фильтрация, проверка текста и остановка | created | Проверяет старые обновления, новую `/start`, тот же чат, дубли и локальную валидацию |
 | `tests/test_geocoding.py` | Клиент геокодирования, ошибки и CLI-вывод | created | Проверяет запрос, валидацию, JSON, mock-сеть, коды завершения и attribution |
+| `tests/test_geocoded_city_handler.py` | Новый однократный Telegram-сценарий с геокодированием | created | Проверяет очистку, offset, чат, локальную валидацию, повтор после пустого результата, ошибки, безопасность и `Ctrl+C` через fake/mock |
 
 ## Текущие границы реализации
 

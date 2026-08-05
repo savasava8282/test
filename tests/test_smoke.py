@@ -73,12 +73,46 @@ class SmokeTest(unittest.TestCase):
         client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
         handler.assert_called_once_with(client_type.return_value)
 
+    def test_wait_for_geocoded_city_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-geocoded-city"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка ожидания города с геокодированием", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_geocoded_city_creates_both_clients_and_uses_handler(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.OpenMeteoGeocodingClient") as geocoder_type:
+                    with patch(
+                        "weather_alert_bot.app.run_until_geocoded_city",
+                        return_value=0,
+                    ) as handler:
+                        return_code = main(["--wait-for-geocoded-city"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        geocoder_type.assert_called_once_with()
+        handler.assert_called_once_with(client_type.return_value, geocoder_type.return_value)
+
     def test_telegram_modes_are_mutually_exclusive(self) -> None:
         for arguments in (
             ["--check-telegram", "--wait-for-start"],
             ["--check-telegram", "--geocode-city", "Москва"],
             ["--wait-for-start", "--geocode-city", "Москва"],
             ["--wait-for-city", "--geocode-city", "Москва"],
+            ["--wait-for-city", "--wait-for-geocoded-city"],
+            ["--wait-for-geocoded-city", "--geocode-city", "Москва"],
         ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(SystemExit) as raised:
@@ -94,6 +128,7 @@ class SmokeTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 0)
         self.assertIn("--wait-for-city", output.getvalue())
+        self.assertIn("--wait-for-geocoded-city", output.getvalue())
         self.assertIn("--geocode-city CITY", output.getvalue())
 
         with self.assertRaises(SystemExit) as raised:
