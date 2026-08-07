@@ -14,12 +14,15 @@ from weather_alert_bot.geocoding import (
     GeocodingLocation,
     OpenMeteoGeocodingClient,
 )
+from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.telegram_api import TelegramClient, TelegramUpdate
 
 
 NO_MATCHES_TEXT = "Подходящие города не найдены. Проверьте название и отправьте город ещё раз."
 GEOCODING_ERROR_TEXT = "Не удалось проверить город через сервис геокодирования. Попробуйте позже."
-CONFIRMATION_TEXT = "Город подтверждён.\n\nГород пока не сохранён."
+CONFIRMATION_TEXT = "Город подтверждён.\n\nГород сохранён."
+CONFIRMATION_SAVED_TEXT = CONFIRMATION_TEXT
+STORAGE_ERROR_TEXT = "Сохранить город не удалось. Попробуйте позже."
 REJECTED_TEXT = "Хорошо. Напишите название другого города."
 UNRECOGNIZED_ANSWER_TEXT = "Не удалось распознать ответ. Напишите «Да» или «Нет»."
 
@@ -56,6 +59,7 @@ def _format_location(location: GeocodingLocation) -> str:
 def run_until_confirmed_city(
     telegram_client: TelegramClient,
     geocoding_client: OpenMeteoGeocodingClient,
+    storage: SQLiteSettingsStore,
 ) -> int:
     """Wait for a city, ask for confirmation, and finish after one confirmation."""
     offset: int | None = None
@@ -138,12 +142,22 @@ def run_until_confirmed_city(
 
                 answer = message.text.strip().casefold()
                 if answer == "да":
+                    try:
+                        storage.save_confirmed_city(started_chat_id, candidate)
+                    except StorageError:
+                        print("Не удалось сохранить настройки города.", file=sys.stderr)
+                        telegram_client.send_message(
+                            chat_id=started_chat_id,
+                            text=STORAGE_ERROR_TEXT,
+                        )
+                        return 1
+
                     telegram_client.send_message(
                         chat_id=started_chat_id,
-                        text=CONFIRMATION_TEXT,
+                        text=CONFIRMATION_SAVED_TEXT,
                     )
                     print("Город подтверждён.")
-                    print("Подтверждение отправлено.")
+                    print("Город сохранён.")
                     return 0
                 if answer == "нет":
                     telegram_client.send_message(

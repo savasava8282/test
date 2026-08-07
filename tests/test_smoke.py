@@ -127,16 +127,22 @@ class SmokeTest(unittest.TestCase):
         ):
             with patch("weather_alert_bot.app.TelegramClient") as client_type:
                 with patch("weather_alert_bot.app.OpenMeteoGeocodingClient") as geocoder_type:
-                    with patch(
-                        "weather_alert_bot.app.run_until_confirmed_city",
-                        return_value=0,
-                    ) as handler:
-                        return_code = main(["--wait-for-confirmed-city"])
+                    with patch("weather_alert_bot.app.SQLiteSettingsStore") as storage_type:
+                        with patch(
+                            "weather_alert_bot.app.run_until_confirmed_city",
+                            return_value=0,
+                        ) as handler:
+                            return_code = main(["--wait-for-confirmed-city"])
 
         self.assertEqual(return_code, 0)
         client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
         geocoder_type.assert_called_once_with()
-        handler.assert_called_once_with(client_type.return_value, geocoder_type.return_value)
+        storage_type.assert_called_once()
+        handler.assert_called_once_with(
+            client_type.return_value,
+            geocoder_type.return_value,
+            storage_type.return_value,
+        )
 
     def test_wait_for_confirmed_city_handles_telegram_error_without_traceback(self) -> None:
         stdout = io.StringIO()

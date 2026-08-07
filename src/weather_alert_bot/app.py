@@ -7,6 +7,7 @@ from weather_alert_bot.config import ConfigError, load_settings
 from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
+from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient
 
@@ -113,9 +114,13 @@ def _wait_for_confirmed_city() -> int:
 
         telegram_client = TelegramClient(settings.telegram_bot_token)
         geocoding_client = OpenMeteoGeocodingClient()
-        return run_until_confirmed_city(telegram_client, geocoding_client)
+        storage = SQLiteSettingsStore(settings.db_path)
+        return run_until_confirmed_city(telegram_client, geocoding_client, storage)
     except ConfigError as exc:
         print(f"Ошибка ожидания подтверждённого города: {exc}", file=sys.stderr)
+        return 1
+    except StorageError:
+        print("Ошибка ожидания подтверждённого города.", file=sys.stderr)
         return 1
     except TelegramApiError:
         print("Ошибка ожидания подтверждённого города.", file=sys.stderr)

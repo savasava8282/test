@@ -1,18 +1,21 @@
 import io
+from pathlib import Path
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import Mock, call
+from unittest.mock import Mock, call, patch
 
 from weather_alert_bot.city_handler import CITY_PROMPT, INVALID_CITY_TEXT
 from weather_alert_bot.confirmed_city_handler import (
-    CONFIRMATION_TEXT,
+    CONFIRMATION_SAVED_TEXT,
     GEOCODING_ERROR_TEXT,
     NO_MATCHES_TEXT,
     REJECTED_TEXT,
     UNRECOGNIZED_ANSWER_TEXT,
-    run_until_confirmed_city,
+    run_until_confirmed_city as run_handler,
 )
 from weather_alert_bot.geocoding import GeocodingError, GeocodingLocation
+from weather_alert_bot.storage import SQLiteSettingsStore, StorageError, UserSettings
 from weather_alert_bot.telegram_api import TelegramMessage, TelegramUpdate
 
 
@@ -60,6 +63,69 @@ def location(**overrides: object) -> GeocodingLocation:
 
 
 class ConfirmedCityHandlerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.storage = SQLiteSettingsStore(
+            Path(self.temporary_directory.name) / "settings.sqlite3"
+        )
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def run_confirmed_city(self, client: FakeTelegramClient, geocoder: Mock) -> int:
+        return run_handler(client, geocoder, self.storage)
+
+    def test_yes_persists_exact_confirmed_candidate_and_final_text(self) -> None:
+        client = FakeTelegramClient(
+            [
+                [],
+                [update(200, "/start", chat_id=700)],
+                [update(201, "Входное имя", chat_id=700)],
+                [update(202, "Да", chat_id=700)],
+            ]
+        )
+        geocoder = Mock()
+        candidate = location(
+            name="Подтверждённый город",
+            latitude=12.345678,
+            longitude=98.765432,
+            timezone="Asia/Tokyo",
+        )
+        geocoder.search.return_value = (candidate,)
+
+        self.assertEqual(self.run_confirmed_city(client, geocoder), 0)
+        self.assertEqual(
+            self.storage.get_user_settings(700),
+            UserSettings(
+                telegram_chat_id=700,
+                city_name="Подтверждённый город",
+                latitude=12.345678,
+                longitude=98.765432,
+                timezone="Asia/Tokyo",
+            ),
+        )
+        self.assertEqual(
+            client.send_message.call_args_list[-1],
+            call(chat_id=700, text="Город подтверждён.\n\nГород сохранён."),
+        )
+
+    def test_storage_error_has_no_false_success_message(self) -> None:
+        client = FakeTelegramClient([[], [update(210, "/start")], [update(211, "Москва")], [update(212, "Да")]])
+        geocoder = Mock()
+        geocoder.search.return_value = (location(),)
+
+        with patch.object(
+            self.storage,
+            "save_confirmed_city",
+            side_effect=StorageError("internal sqlite details"),
+        ):
+            result = self.run_confirmed_city(client, geocoder)
+
+        self.assertEqual(result, 1)
+        sent_texts = [item.kwargs["text"] for item in client.send_message.call_args_list]
+        self.assertIn("Сохранить город не удалось. Попробуйте позже.", sent_texts)
+        self.assertNotIn("Город подтверждён.\n\nГород сохранён.", sent_texts)
+
     def test_cleanup_ignores_old_updates_and_duplicate_ids(self) -> None:
         client = FakeTelegramClient(
             [
@@ -79,7 +145,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         output = io.StringIO()
 
         with redirect_stdout(output):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         geocoder.search.assert_called_once_with("Москва", count=5, language="ru")
@@ -87,7 +153,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         self.assertEqual(client.send_message.call_args_list[0], call(chat_id=42, text=CITY_PROMPT))
         self.assertEqual(
             client.send_message.call_args_list[-1],
-            call(chat_id=42, text="Город подтверждён.\n\nГород пока не сохранён."),
+            call(chat_id=42, text=CONFIRMATION_SAVED_TEXT),
         )
         self.assertEqual(
             client.get_updates_calls,
@@ -121,12 +187,12 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         geocoder = Mock()
         geocoder.search.return_value = (location(name="Санкт-Петербург", admin1=None),)
 
-        result = run_until_confirmed_city(client, geocoder)
+        result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         geocoder.search.assert_called_once_with("Санкт-Петербург", count=5, language="ru")
         self.assertEqual(client.send_message.call_args_list[0], call(chat_id=42, text=CITY_PROMPT))
-        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_TEXT))
+        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_SAVED_TEXT))
 
     def test_invalid_city_is_rejected_and_commands_are_not_geocoded(self) -> None:
         client = FakeTelegramClient(
@@ -142,7 +208,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         geocoder = Mock()
         geocoder.search.side_effect = [(location(name="New York", admin1=None, country="США"),), (location(),)]
 
-        result = run_until_confirmed_city(client, geocoder)
+        result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         self.assertEqual(
@@ -163,7 +229,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         stdout = io.StringIO()
 
         with redirect_stdout(stdout):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         candidate_text = client.send_message.call_args_list[1].kwargs["text"]
@@ -187,12 +253,12 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         output = io.StringIO()
 
         with redirect_stdout(output):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         geocoder.search.assert_called_once()
-        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_TEXT))
-        self.assertIn("Город подтверждён.\nПодтверждение отправлено.\n", output.getvalue())
+        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_SAVED_TEXT))
+        self.assertIn("Город подтверждён.\nГород сохранён.\n", output.getvalue())
 
     def test_no_returns_to_city_input_without_second_start(self) -> None:
         client = FakeTelegramClient(
@@ -203,7 +269,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         output = io.StringIO()
 
         with redirect_stdout(output):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         self.assertEqual(geocoder.search.call_count, 2)
@@ -211,6 +277,27 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         self.assertEqual(client.send_message.call_args_list[2], call(chat_id=42, text=REJECTED_TEXT))
         self.assertIn("Сочи", client.send_message.call_args_list[3].kwargs["text"])
         self.assertIn("Город отклонён. Ожидание другого названия города...", output.getvalue())
+        self.assertEqual(self.storage.get_user_settings(42).city_name, "Сочи")
+
+    def test_no_does_not_save_when_no_replacement_is_confirmed(self) -> None:
+        client = FakeTelegramClient(
+            [[], [update(55, "/start")], [update(56, "Москва")], [update(57, "Нет")], KeyboardInterrupt()]
+        )
+        geocoder = Mock()
+        geocoder.search.return_value = (location(),)
+
+        self.assertEqual(self.run_confirmed_city(client, geocoder), 130)
+        self.assertIsNone(self.storage.get_user_settings(42))
+
+    def test_invalid_confirmation_does_not_write(self) -> None:
+        client = FakeTelegramClient(
+            [[], [update(58, "/start")], [update(59, "Москва")], [update(60, "maybe")], KeyboardInterrupt()]
+        )
+        geocoder = Mock()
+        geocoder.search.return_value = (location(),)
+
+        self.assertEqual(self.run_confirmed_city(client, geocoder), 130)
+        self.assertIsNone(self.storage.get_user_settings(42))
 
     def test_invalid_confirmation_does_not_change_candidate_or_geocode_again(self) -> None:
         client = FakeTelegramClient(
@@ -224,7 +311,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         geocoder = Mock()
         geocoder.search.return_value = (location(),)
 
-        result = run_until_confirmed_city(client, geocoder)
+        result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         geocoder.search.assert_called_once()
@@ -232,7 +319,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
             [item.kwargs["text"] for item in client.send_message.call_args_list[2:6]],
             [UNRECOGNIZED_ANSWER_TEXT] * 4,
         )
-        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_TEXT))
+        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_SAVED_TEXT))
 
     def test_other_chat_and_group_answers_are_ignored(self) -> None:
         client = FakeTelegramClient(
@@ -241,8 +328,8 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         geocoder = Mock()
         geocoder.search.return_value = (location(),)
 
-        self.assertEqual(run_until_confirmed_city(client, geocoder), 0)
-        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_TEXT))
+        self.assertEqual(self.run_confirmed_city(client, geocoder), 0)
+        self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=CONFIRMATION_SAVED_TEXT))
         self.assertEqual(client.send_message.call_count, 3)
 
     def test_empty_result_allows_successful_follow_up(self) -> None:
@@ -252,7 +339,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         output = io.StringIO()
 
         with redirect_stdout(output):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 0)
         self.assertEqual(client.send_message.call_args_list[1], call(chat_id=42, text=NO_MATCHES_TEXT))
@@ -267,7 +354,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         stderr = io.StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            result = run_until_confirmed_city(client, geocoder)
+            result = self.run_confirmed_city(client, geocoder)
 
         self.assertEqual(result, 1)
         self.assertEqual(client.send_message.call_args_list[-1], call(chat_id=42, text=GEOCODING_ERROR_TEXT))
@@ -276,13 +363,24 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         self.assertNotIn("https://", stderr.getvalue())
         self.assertNotIn("{", stderr.getvalue())
         self.assertNotIn("Traceback", stdout.getvalue() + stderr.getvalue())
+        self.assertIsNone(self.storage.get_user_settings(42))
+
+    def test_no_matches_does_not_create_record(self) -> None:
+        client = FakeTelegramClient(
+            [[], [update(95, "/start")], [update(96, "Неизвестный город")], KeyboardInterrupt()]
+        )
+        geocoder = Mock()
+        geocoder.search.return_value = ()
+
+        self.assertEqual(self.run_confirmed_city(client, geocoder), 130)
+        self.assertIsNone(self.storage.get_user_settings(42))
 
     def test_keyboard_interrupt_returns_130_without_traceback(self) -> None:
         client = FakeTelegramClient([[], KeyboardInterrupt()])
         output = io.StringIO()
 
         with redirect_stdout(output):
-            result = run_until_confirmed_city(client, Mock())
+            result = self.run_confirmed_city(client, Mock())
 
         self.assertEqual(result, 130)
         self.assertEqual(
@@ -299,7 +397,7 @@ class ConfirmedCityHandlerTest(unittest.TestCase):
         stderr = io.StringIO()
 
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            self.assertEqual(run_until_confirmed_city(client, geocoder), 0)
+            self.assertEqual(self.run_confirmed_city(client, geocoder), 0)
 
         terminal = stdout.getvalue() + stderr.getvalue()
         for secret in ("123456789:TEST_TOKEN_NOT_REAL", "42", "СекретныйГород", "НайденныйГород", "1.234568", "2.345679", "https://", "{", "}", "Traceback"):
