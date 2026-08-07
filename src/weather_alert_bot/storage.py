@@ -3,12 +3,28 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from weather_alert_bot.geocoding import GeocodingLocation
 
 
 class StorageError(RuntimeError):
     """Raised when confirmed city settings cannot be stored safely."""
+
+
+DAILY_SEND_TIME_DEFAULT = "07:00"
+_DAILY_SEND_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
+
+
+def normalize_daily_send_time(value: str) -> str:
+    """Return a strict local 24-hour time in normalized HH:MM form."""
+    if not isinstance(value, str):
+        raise ValueError("Время ежедневной отправки должно быть текстом.")
+
+    normalized = value.strip()
+    if _DAILY_SEND_TIME_PATTERN.fullmatch(normalized) is None:
+        raise ValueError("Время ежедневной отправки должно быть в формате ЧЧ:ММ.")
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +34,7 @@ class UserSettings:
     latitude: float
     longitude: float
     timezone: str
+    daily_send_time: str = DAILY_SEND_TIME_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -29,7 +46,8 @@ class SQLiteSettingsStore:
             city_name TEXT NOT NULL,
             latitude REAL NOT NULL,
             longitude REAL NOT NULL,
-            timezone TEXT NOT NULL
+            timezone TEXT NOT NULL,
+            daily_send_time TEXT NOT NULL DEFAULT '07:00'
         )
     """
 
@@ -39,6 +57,17 @@ class SQLiteSettingsStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(self.path) as connection:
                 connection.execute(self._TABLE_SCHEMA)
+                columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(user_settings)")
+                }
+                if "daily_send_time" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE user_settings
+                        ADD COLUMN daily_send_time TEXT NOT NULL DEFAULT '07:00'
+                        """
+                    )
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось инициализировать хранилище.") from exc
 
@@ -74,7 +103,8 @@ class SQLiteSettingsStore:
             with sqlite3.connect(self.path) as connection:
                 row = connection.execute(
                     """
-                    SELECT telegram_chat_id, city_name, latitude, longitude, timezone
+                    SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
+                           daily_send_time
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -91,4 +121,29 @@ class SQLiteSettingsStore:
             latitude=row[2],
             longitude=row[3],
             timezone=row[4],
+            daily_send_time=row[5],
         )
+
+    def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
+        """Update the local daily send time for an existing saved city only."""
+        try:
+            normalized_time = normalize_daily_send_time(daily_send_time)
+        except ValueError as exc:
+            raise StorageError("Некорректное время ежедневной отправки.") from exc
+
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_settings
+                    SET daily_send_time = ?
+                    WHERE telegram_chat_id = ?
+                    """,
+                    (normalized_time, telegram_chat_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните город пользователя.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError("Не удалось сохранить время ежедневной отправки.") from exc
