@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from weather_alert_bot.city_handler import run_until_city
 from weather_alert_bot.config import ConfigError, load_settings
 from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
+from weather_alert_bot.daily_days_handler import run_until_daily_days
 from weather_alert_bot.daily_time_handler import run_until_daily_time
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
@@ -48,6 +49,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="настроить время ежедневной отправки для сохранённого города",
     )
     telegram_group.add_argument(
+        "--wait-for-daily-days",
+        action="store_true",
+        help="настроить дни ежедневной отправки для сохранённого города",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -66,6 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_confirmed_city()
     if args.wait_for_daily_time:
         return _wait_for_daily_time()
+    if args.wait_for_daily_days:
+        return _wait_for_daily_days()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -152,6 +160,26 @@ def _wait_for_daily_time() -> int:
         return 1
     except TelegramApiError:
         print("Ошибка настройки времени ежедневной отправки.", file=sys.stderr)
+        return 1
+
+
+def _wait_for_daily_days() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        storage = SQLiteSettingsStore(settings.db_path)
+        return run_until_daily_days(telegram_client, storage)
+    except ConfigError:
+        print("Ошибка настройки дней ежедневной отправки.", file=sys.stderr)
+        return 1
+    except StorageError:
+        print("Ошибка настройки дней ежедневной отправки.", file=sys.stderr)
+        return 1
+    except TelegramApiError:
+        print("Ошибка настройки дней ежедневной отправки.", file=sys.stderr)
         return 1
 
 

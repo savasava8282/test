@@ -226,6 +226,62 @@ class SmokeTest(unittest.TestCase):
         self.assertNotIn("Traceback", stdout.getvalue() + stderr.getvalue())
         self.assertNotIn("internal details", stdout.getvalue() + stderr.getvalue())
 
+    def test_wait_for_daily_days_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-daily-days"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка настройки дней ежедневной отправки", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_daily_days_creates_client_and_storage_and_uses_handler(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.SQLiteSettingsStore") as storage_type:
+                    with patch(
+                        "weather_alert_bot.app.run_until_daily_days",
+                        return_value=0,
+                    ) as handler:
+                        return_code = main(["--wait-for-daily-days"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        storage_type.assert_called_once()
+        handler.assert_called_once_with(client_type.return_value, storage_type.return_value)
+
+    def test_wait_for_daily_days_handles_storage_error_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch.dict(
+                os.environ,
+                {
+                    "TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL",
+                    "WEATHER_ALERT_BOT_DB_PATH": str(Path(temporary_directory) / "settings.sqlite3"),
+                },
+                clear=True,
+            ):
+                with patch(
+                    "weather_alert_bot.app.run_until_daily_days",
+                    side_effect=StorageError("internal details"),
+                ):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        return_code = main(["--wait-for-daily-days"])
+
+        self.assertEqual(return_code, 1)
+        self.assertNotIn("Traceback", stdout.getvalue() + stderr.getvalue())
+        self.assertNotIn("internal details", stdout.getvalue() + stderr.getvalue())
+
     def test_wait_for_confirmed_city_is_mutually_exclusive_with_existing_modes(self) -> None:
         for arguments in (
             ["--check-telegram", "--wait-for-confirmed-city"],
@@ -234,6 +290,7 @@ class SmokeTest(unittest.TestCase):
             ["--wait-for-geocoded-city", "--wait-for-confirmed-city"],
             ["--wait-for-confirmed-city", "--geocode-city", "Москва"],
             ["--wait-for-confirmed-city", "--wait-for-daily-time"],
+            ["--wait-for-confirmed-city", "--wait-for-daily-days"],
         ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(SystemExit) as raised:
@@ -250,6 +307,8 @@ class SmokeTest(unittest.TestCase):
             ["--wait-for-geocoded-city", "--geocode-city", "Москва"],
             ["--wait-for-confirmed-city", "--geocode-city", "Москва"],
             ["--wait-for-daily-time", "--geocode-city", "Москва"],
+            ["--wait-for-daily-days", "--geocode-city", "Москва"],
+            ["--wait-for-daily-time", "--wait-for-daily-days"],
         ):
             with self.subTest(arguments=arguments):
                 with self.assertRaises(SystemExit) as raised:
@@ -268,6 +327,7 @@ class SmokeTest(unittest.TestCase):
         self.assertIn("--wait-for-geocoded-city", output.getvalue())
         self.assertIn("--wait-for-confirmed-city", output.getvalue())
         self.assertIn("--wait-for-daily-time", output.getvalue())
+        self.assertIn("--wait-for-daily-days", output.getvalue())
         self.assertIn("--geocode-city CITY", output.getvalue())
 
         with self.assertRaises(SystemExit) as raised:

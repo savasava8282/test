@@ -13,7 +13,9 @@ class StorageError(RuntimeError):
 
 
 DAILY_SEND_TIME_DEFAULT = "07:00"
+DAILY_SEND_DAYS_DEFAULT = "1,2,3,4,5,6,7"
 _DAILY_SEND_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
+_DAILY_SEND_DAY_PATTERN = re.compile(r"[1-7]\Z")
 
 
 def normalize_daily_send_time(value: str) -> str:
@@ -27,6 +29,24 @@ def normalize_daily_send_time(value: str) -> str:
     return normalized
 
 
+def normalize_daily_send_days(value: str) -> str:
+    """Return selected weekdays in canonical ascending numeric form."""
+    if not isinstance(value, str):
+        raise ValueError("Дни ежедневной отправки должны быть текстом.")
+
+    parts = value.strip().split(",")
+    if not parts or any(not part.strip() for part in parts):
+        raise ValueError("Нужно выбрать хотя бы один день.")
+
+    normalized_parts = [part.strip() for part in parts]
+    if any(_DAILY_SEND_DAY_PATTERN.fullmatch(part) is None for part in normalized_parts):
+        raise ValueError("Дни должны быть номерами от 1 до 7 через запятую.")
+    if len(set(normalized_parts)) != len(normalized_parts):
+        raise ValueError("Дни не должны повторяться.")
+
+    return ",".join(sorted(normalized_parts, key=int))
+
+
 @dataclass(frozen=True, slots=True)
 class UserSettings:
     telegram_chat_id: int
@@ -35,6 +55,7 @@ class UserSettings:
     longitude: float
     timezone: str
     daily_send_time: str = DAILY_SEND_TIME_DEFAULT
+    daily_send_days: str = DAILY_SEND_DAYS_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -47,7 +68,8 @@ class SQLiteSettingsStore:
             latitude REAL NOT NULL,
             longitude REAL NOT NULL,
             timezone TEXT NOT NULL,
-            daily_send_time TEXT NOT NULL DEFAULT '07:00'
+            daily_send_time TEXT NOT NULL DEFAULT '07:00',
+            daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'
         )
     """
 
@@ -66,6 +88,13 @@ class SQLiteSettingsStore:
                         """
                         ALTER TABLE user_settings
                         ADD COLUMN daily_send_time TEXT NOT NULL DEFAULT '07:00'
+                        """
+                    )
+                if "daily_send_days" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE user_settings
+                        ADD COLUMN daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'
                         """
                     )
         except (OSError, sqlite3.Error) as exc:
@@ -104,7 +133,7 @@ class SQLiteSettingsStore:
                 row = connection.execute(
                     """
                     SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
-                           daily_send_time
+                           daily_send_time, daily_send_days
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -122,6 +151,7 @@ class SQLiteSettingsStore:
             longitude=row[3],
             timezone=row[4],
             daily_send_time=row[5],
+            daily_send_days=row[6],
         )
 
     def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
@@ -147,3 +177,27 @@ class SQLiteSettingsStore:
             raise
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось сохранить время ежедневной отправки.") from exc
+
+    def save_daily_send_days(self, telegram_chat_id: int, daily_send_days: str) -> None:
+        """Update weekdays for an existing saved city only."""
+        try:
+            normalized_days = normalize_daily_send_days(daily_send_days)
+        except ValueError as exc:
+            raise StorageError("Некорректные дни ежедневной отправки.") from exc
+
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_settings
+                    SET daily_send_days = ?
+                    WHERE telegram_chat_id = ?
+                    """,
+                    (normalized_days, telegram_chat_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните город пользователя.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError("Не удалось сохранить дни ежедневной отправки.") from exc

@@ -5,10 +5,12 @@ import unittest
 
 from weather_alert_bot.geocoding import GeocodingLocation
 from weather_alert_bot.storage import (
+    DAILY_SEND_DAYS_DEFAULT,
     DAILY_SEND_TIME_DEFAULT,
     SQLiteSettingsStore,
     StorageError,
     UserSettings,
+    normalize_daily_send_days,
 )
 
 
@@ -57,7 +59,71 @@ class SQLiteSettingsStoreTest(unittest.TestCase):
         self.assertEqual(columns["daily_send_time"], "'07:00'")
 
         self.store.save_confirmed_city(42, candidate("Москва", 55.75, 37.61, "Europe/Moscow"))
-        self.assertEqual(self.store.get_user_settings(42).daily_send_time, DAILY_SEND_TIME_DEFAULT)
+        settings = self.store.get_user_settings(42)
+        self.assertEqual(settings.daily_send_time, DAILY_SEND_TIME_DEFAULT)
+        self.assertEqual(settings.daily_send_days, DAILY_SEND_DAYS_DEFAULT)
+
+    def test_new_schema_has_default_daily_send_days(self) -> None:
+        with sqlite3.connect(self.path) as connection:
+            columns = {
+                row[1]: row[4]
+                for row in connection.execute("PRAGMA table_info(user_settings)")
+            }
+
+        self.assertEqual(columns["daily_send_days"], "'1,2,3,4,5,6,7'")
+
+    def test_current_schema_migrates_days_and_preserves_0830_and_city_data(self) -> None:
+        current_path = Path(self.temporary_directory.name) / "current.sqlite3"
+        with sqlite3.connect(current_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE user_settings (
+                    telegram_chat_id INTEGER PRIMARY KEY,
+                    city_name TEXT NOT NULL,
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    timezone TEXT NOT NULL,
+                    daily_send_time TEXT NOT NULL DEFAULT '07:00'
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO user_settings (
+                    telegram_chat_id, city_name, latitude, longitude, timezone,
+                    daily_send_time
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (42, "Москва", 55.75204, 37.61781, "Europe/Moscow", "08:30"),
+            )
+
+        migrated_store = SQLiteSettingsStore(current_path)
+        settings = migrated_store.get_user_settings(42)
+
+        self.assertEqual(settings.city_name, "Москва")
+        self.assertEqual(settings.latitude, 55.75204)
+        self.assertEqual(settings.longitude, 37.61781)
+        self.assertEqual(settings.timezone, "Europe/Moscow")
+        self.assertEqual(settings.daily_send_time, "08:30")
+        self.assertEqual(settings.daily_send_days, DAILY_SEND_DAYS_DEFAULT)
+        with sqlite3.connect(current_path) as connection:
+            columns = [
+                row[1]
+                for row in connection.execute("PRAGMA table_info(user_settings)")
+            ]
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM user_settings").fetchone()[0], 1)
+        self.assertIn("daily_send_days", columns)
+
+    def test_migration_is_idempotent(self) -> None:
+        SQLiteSettingsStore(self.path)
+        SQLiteSettingsStore(self.path)
+
+        with sqlite3.connect(self.path) as connection:
+            columns = [
+                row[1]
+                for row in connection.execute("PRAGMA table_info(user_settings)")
+            ]
+        self.assertEqual(columns.count("daily_send_days"), 1)
 
     def test_old_schema_migrates_without_changing_existing_city_data(self) -> None:
         old_path = Path(self.temporary_directory.name) / "old.sqlite3"
@@ -109,6 +175,39 @@ class SQLiteSettingsStoreTest(unittest.TestCase):
 
         self.assertIsNone(self.store.get_user_settings(42))
 
+    def test_save_daily_send_days_updates_existing_row_and_can_repeat(self) -> None:
+        self.store.save_confirmed_city(42, candidate("Москва", 55.75, 37.61, "Europe/Moscow"))
+        self.store.save_daily_send_time(42, "08:30")
+
+        self.store.save_daily_send_days(42, "5,1,3")
+        self.store.save_daily_send_days(42, "6,7")
+
+        settings = self.store.get_user_settings(42)
+        self.assertEqual(settings.daily_send_days, "6,7")
+        self.assertEqual(settings.daily_send_time, "08:30")
+        self.assertEqual(settings.city_name, "Москва")
+        self.assertEqual(settings.latitude, 55.75)
+        self.assertEqual(settings.longitude, 37.61)
+        self.assertEqual(settings.timezone, "Europe/Moscow")
+
+    def test_save_daily_send_days_does_not_create_missing_user(self) -> None:
+        with self.assertRaises(StorageError):
+            self.store.save_daily_send_days(42, "1,2")
+
+        self.assertIsNone(self.store.get_user_settings(42))
+
+    def test_save_confirmed_city_preserves_existing_daily_send_days(self) -> None:
+        self.store.save_confirmed_city(42, candidate("Москва", 55.75, 37.61, "Europe/Moscow"))
+        self.store.save_daily_send_time(42, "08:30")
+        self.store.save_daily_send_days(42, "1,3,5")
+
+        self.store.save_confirmed_city(42, candidate("Сочи", 43.58, 39.72, "Europe/Moscow"))
+
+        settings = self.store.get_user_settings(42)
+        self.assertEqual(settings.city_name, "Сочи")
+        self.assertEqual(settings.daily_send_time, "08:30")
+        self.assertEqual(settings.daily_send_days, "1,3,5")
+
     def test_save_confirmed_city_preserves_existing_daily_send_time(self) -> None:
         self.store.save_confirmed_city(42, candidate("Москва", 55.75, 37.61, "Europe/Moscow"))
         self.store.save_daily_send_time(42, "18:30")
@@ -145,6 +244,47 @@ class SQLiteSettingsStoreTest(unittest.TestCase):
             self.store.save_daily_send_time(42, "24:00")
 
         self.assertEqual(self.store.get_user_settings(42).daily_send_time, "18:30")
+
+    def test_invalid_storage_days_do_not_change_existing_value(self) -> None:
+        self.store.save_confirmed_city(42, candidate("Москва", 55.75, 37.61, "Europe/Moscow"))
+        self.store.save_daily_send_days(42, "6,7")
+
+        with self.assertRaises(StorageError):
+            self.store.save_daily_send_days(42, "1,1")
+
+        self.assertEqual(self.store.get_user_settings(42).daily_send_days, "6,7")
+
+
+class DailySendDaysNormalizationTest(unittest.TestCase):
+    def test_valid_values_are_canonicalized(self) -> None:
+        for value, expected in (
+            ("1,2,3,4,5,6,7", "1,2,3,4,5,6,7"),
+            ("1,2,3,4,5", "1,2,3,4,5"),
+            ("6,7", "6,7"),
+            ("1, 3, 5", "1,3,5"),
+            ("5,1,3", "1,3,5"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(normalize_daily_send_days(value), expected)
+
+    def test_invalid_values_are_rejected(self) -> None:
+        for value in (
+            "",
+            "   ",
+            "0",
+            "8",
+            "1,8",
+            "1,,2",
+            "1-5",
+            "Пн",
+            "abc",
+            "/start",
+            "/help",
+            "1,1",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    normalize_daily_send_days(value)
 
 
 if __name__ == "__main__":
