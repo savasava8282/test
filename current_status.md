@@ -167,7 +167,7 @@
 - `--wait-for-daily-days` подтверждён 132 автоматическими тестами с временными SQLite-базами и fake/mock Telegram; `python3 -m compileall -q src` завершился успешно. Реальный Telegram-тест нового режима ещё не выполнялся.
 - Исторический stop-point на тот момент: хранение и отдельная однократная настройка дней были реализованы и автоматически проверены; реальный Telegram-тест дней ещё не выполнялся. Scheduler, forecast, scheduled sending, urgent warnings и systemd не начинались. `next_steps.md` отсутствует.
 
-## Актуальный stop-point после реального теста `--wait-for-daily-days`
+## Историческая запись после реального теста `--wait-for-daily-days`
 
 - До реального запуска read-only проверка фактической SQLite-базы показала схему без `daily_send_days`: `telegram_chat_id`, `city_name`, `latitude`, `longitude`, `timezone`, `daily_send_time`. Реальные данные были: `city_name = Москва`, `latitude = 55.75204`, `longitude = 37.61781`, `timezone = Europe/Moscow`, `daily_send_time = 08:30`.
 - Перед миграцией создан backup `~/.local/share/weather-alert-bot/settings.before-daily-days.sqlite3`; `cmp` подтвердил `Backup OK`. Backup в Git не добавлялся.
@@ -183,4 +183,14 @@
 - Процесс штатно завершился и вернул shell prompt.
 - После теста read-only проверка фактической SQLite-базы показала схему с добавленным `daily_send_days`: `telegram_chat_id`, `city_name`, `latitude`, `longitude`, `timezone`, `daily_send_time`, `daily_send_days`. Реальные данные после миграции: `city_name = Москва`, `latitude = 55.75204`, `longitude = 37.61781`, `timezone = Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`.
 - Реально подтверждены безопасная миграция существующей БД, сохранение прежних данных и времени `08:30`, отказ дублей, продолжение ожидания после некорректного ввода, нормализация `5,1,3` в `1,3,5`, русское отображение `Пн, Ср, Пт` и штатное завершение режима.
-- Единственный актуальный stop-point: город сохранён и реально проверен; время ежедневной отправки `08:30` реально проверено; дни ежедневной отправки `1,3,5` реально проверены. Следующий функциональный этап ещё не начинался. Scheduler, forecast, scheduled sending, urgent warnings и systemd не реализованы. `next_steps.md` отсутствует.
+- Исторический stop-point на тот момент: город сохранён и реально проверен; время ежедневной отправки `08:30` реально проверено; дни ежедневной отправки `1,3,5` реально проверены. Следующий функциональный этап ещё не начинался. Scheduler, forecast, scheduled sending, urgent warnings и systemd не реализованы. `next_steps.md` отсутствует.
+
+## Актуальный stop-point после реализации сохранения срочных предупреждений
+
+- В `user_settings` добавлено `urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1`. `1` означает включённые срочные предупреждения, `0` — выключенные; новая база получает включённое значение по умолчанию.
+- Для текущей схемы с `daily_send_time` и `daily_send_days` добавляется только `urgent_warnings_enabled` через недеструктивный `ALTER TABLE`. Последовательность миграций также поддерживает более старые схемы без одного или обоих полей; миграция идемпотентна, таблица и строки не пересоздаются и не удаляются.
+- `UserSettings` возвращает SQLite `0/1` как Python `False/True`. `save_urgent_warnings_enabled()` принимает только boolean, обновляет только существующего пользователя с сохранённым городом и не сбрасывает город, координаты, timezone, `daily_send_time` или `daily_send_days`. Повторное `save_confirmed_city()` сохраняет пользовательское значение.
+- Добавлены независимые `urgent_warnings_handler.py` и CLI-режим `--wait-for-urgent-warnings`. Автоматические fake/mock-тесты проверили prompt, ответы `Да`/`Нет`, регистр и пробелы, некорректный ввод с продолжением ожидания, старые updates, группы, другой chat, отсутствие города, StorageError, `KeyboardInterrupt`, безопасный CLI и взаимоисключение режимов.
+- Полный набор автоматических тестов: 152 теста успешно; `python3 -m compileall -q src` успешно. Все SQLite-тесты используют только временные базы; реальная пользовательская SQLite-база не открывалась.
+- Реальный Telegram-тест `--wait-for-urgent-warnings` ещё НЕ выполнялся. Ранее реально подтверждённые значения `daily_send_time = 08:30` и `daily_send_days = 1,3,5` остаются текущим доказанным состоянием.
+- Единственный актуальный stop-point: сохранение настройки срочных предупреждений реализовано и подтверждено автоматическими тестами, default включён. Следующий безопасный шаг — контролируемый реальный Telegram-тест `--wait-for-urgent-warnings`. Категории предупреждений ещё не реализованы; scheduler, forecast, scheduled sending и systemd не начинались. `next_steps.md` отсутствует.

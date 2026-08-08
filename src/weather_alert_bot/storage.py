@@ -14,6 +14,7 @@ class StorageError(RuntimeError):
 
 DAILY_SEND_TIME_DEFAULT = "07:00"
 DAILY_SEND_DAYS_DEFAULT = "1,2,3,4,5,6,7"
+URGENT_WARNINGS_ENABLED_DEFAULT = True
 _DAILY_SEND_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
 _DAILY_SEND_DAY_PATTERN = re.compile(r"[1-7]\Z")
 
@@ -56,6 +57,7 @@ class UserSettings:
     timezone: str
     daily_send_time: str = DAILY_SEND_TIME_DEFAULT
     daily_send_days: str = DAILY_SEND_DAYS_DEFAULT
+    urgent_warnings_enabled: bool = URGENT_WARNINGS_ENABLED_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -69,7 +71,8 @@ class SQLiteSettingsStore:
             longitude REAL NOT NULL,
             timezone TEXT NOT NULL,
             daily_send_time TEXT NOT NULL DEFAULT '07:00',
-            daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'
+            daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+            urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1
         )
     """
 
@@ -95,6 +98,13 @@ class SQLiteSettingsStore:
                         """
                         ALTER TABLE user_settings
                         ADD COLUMN daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'
+                        """
+                    )
+                if "urgent_warnings_enabled" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE user_settings
+                        ADD COLUMN urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1
                         """
                     )
         except (OSError, sqlite3.Error) as exc:
@@ -133,7 +143,7 @@ class SQLiteSettingsStore:
                 row = connection.execute(
                     """
                     SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
-                           daily_send_time, daily_send_days
+                           daily_send_time, daily_send_days, urgent_warnings_enabled
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -152,6 +162,7 @@ class SQLiteSettingsStore:
             timezone=row[4],
             daily_send_time=row[5],
             daily_send_days=row[6],
+            urgent_warnings_enabled=bool(row[7]),
         )
 
     def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
@@ -201,3 +212,31 @@ class SQLiteSettingsStore:
             raise
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось сохранить дни ежедневной отправки.") from exc
+
+    def save_urgent_warnings_enabled(
+        self,
+        telegram_chat_id: int,
+        enabled: bool,
+    ) -> None:
+        """Update urgent-warning preference for an existing saved city only."""
+        if type(enabled) is not bool:
+            raise StorageError("Настройка срочных предупреждений должна быть boolean.")
+
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_settings
+                    SET urgent_warnings_enabled = ?
+                    WHERE telegram_chat_id = ?
+                    """,
+                    (int(enabled), telegram_chat_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните город пользователя.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError(
+                "Не удалось сохранить настройку срочных предупреждений."
+            ) from exc

@@ -258,6 +258,65 @@ class SmokeTest(unittest.TestCase):
         storage_type.assert_called_once()
         handler.assert_called_once_with(client_type.return_value, storage_type.return_value)
 
+    def test_wait_for_urgent_warnings_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-urgent-warnings"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка настройки срочных предупреждений", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_urgent_warnings_creates_client_and_storage_and_uses_handler(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.SQLiteSettingsStore") as storage_type:
+                    with patch(
+                        "weather_alert_bot.app.run_until_urgent_warnings",
+                        return_value=0,
+                    ) as handler:
+                        return_code = main(["--wait-for-urgent-warnings"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        storage_type.assert_called_once()
+        handler.assert_called_once_with(client_type.return_value, storage_type.return_value)
+
+    def test_wait_for_urgent_warnings_handles_storage_error_without_traceback(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch(
+                "weather_alert_bot.app.run_until_urgent_warnings",
+                side_effect=StorageError("internal details"),
+            ):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    return_code = main(["--wait-for-urgent-warnings"])
+
+        self.assertEqual(return_code, 1)
+        terminal = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn("Traceback", terminal)
+        self.assertNotIn("internal details", terminal)
+
+    def test_one_shot_modes_are_mutually_exclusive_with_urgent_warnings(self) -> None:
+        with self.assertRaises(SystemExit) as context:
+            main(["--wait-for-urgent-warnings", "--wait-for-daily-days"])
+
+        self.assertEqual(context.exception.code, 2)
+
     def test_wait_for_daily_days_handles_storage_error_without_traceback(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
