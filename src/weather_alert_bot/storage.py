@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from collections.abc import Iterable, Mapping
 
 from weather_alert_bot.geocoding import GeocodingLocation
 
@@ -15,6 +16,20 @@ class StorageError(RuntimeError):
 DAILY_SEND_TIME_DEFAULT = "07:00"
 DAILY_SEND_DAYS_DEFAULT = "1,2,3,4,5,6,7"
 URGENT_WARNINGS_ENABLED_DEFAULT = True
+WARNING_CATEGORY_DEFAULT = True
+WARNING_CATEGORY_KEYS: tuple[str, ...] = (
+    "magnetic_storm",
+    "heat",
+    "cold",
+    "icing",
+    "heavy_rain",
+    "thunderstorm",
+    "strong_wind",
+    "storm",
+)
+WARNING_CATEGORY_COLUMNS = {
+    key: f"warning_{key}_enabled" for key in WARNING_CATEGORY_KEYS
+}
 _DAILY_SEND_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
 _DAILY_SEND_DAY_PATTERN = re.compile(r"[1-7]\Z")
 
@@ -48,6 +63,26 @@ def normalize_daily_send_days(value: str) -> str:
     return ",".join(sorted(normalized_parts, key=int))
 
 
+def normalize_warning_categories(value: Iterable[str]) -> frozenset[str]:
+    """Validate and canonicalize the enabled warning-category keys."""
+    if isinstance(value, (str, bytes, bytearray, Mapping)):
+        raise ValueError("Категории предупреждений должны быть набором ключей.")
+
+    try:
+        categories = tuple(value)
+    except TypeError as exc:
+        raise ValueError("Категории предупреждений должны быть набором ключей.") from exc
+
+    if any(not isinstance(category, str) for category in categories):
+        raise ValueError("Ключ категории предупреждений должен быть текстом.")
+    if any(category not in WARNING_CATEGORY_COLUMNS for category in categories):
+        raise ValueError("Неизвестная категория предупреждений.")
+    if len(categories) != len(set(categories)):
+        raise ValueError("Категории предупреждений не должны повторяться.")
+
+    return frozenset(categories)
+
+
 @dataclass(frozen=True, slots=True)
 class UserSettings:
     telegram_chat_id: int
@@ -58,6 +93,14 @@ class UserSettings:
     daily_send_time: str = DAILY_SEND_TIME_DEFAULT
     daily_send_days: str = DAILY_SEND_DAYS_DEFAULT
     urgent_warnings_enabled: bool = URGENT_WARNINGS_ENABLED_DEFAULT
+    warning_magnetic_storm_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_heat_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_cold_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_icing_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_heavy_rain_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_thunderstorm_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_strong_wind_enabled: bool = WARNING_CATEGORY_DEFAULT
+    warning_storm_enabled: bool = WARNING_CATEGORY_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -72,7 +115,15 @@ class SQLiteSettingsStore:
             timezone TEXT NOT NULL,
             daily_send_time TEXT NOT NULL DEFAULT '07:00',
             daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
-            urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1
+            urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_magnetic_storm_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_heat_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_cold_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_icing_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_heavy_rain_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_thunderstorm_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_strong_wind_enabled INTEGER NOT NULL DEFAULT 1,
+            warning_storm_enabled INTEGER NOT NULL DEFAULT 1
         )
     """
 
@@ -107,6 +158,14 @@ class SQLiteSettingsStore:
                         ADD COLUMN urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1
                         """
                     )
+                for column in WARNING_CATEGORY_COLUMNS.values():
+                    if column not in columns:
+                        connection.execute(
+                            f"""
+                            ALTER TABLE user_settings
+                            ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1
+                            """
+                        )
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось инициализировать хранилище.") from exc
 
@@ -143,7 +202,11 @@ class SQLiteSettingsStore:
                 row = connection.execute(
                     """
                     SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
-                           daily_send_time, daily_send_days, urgent_warnings_enabled
+                           daily_send_time, daily_send_days, urgent_warnings_enabled,
+                           warning_magnetic_storm_enabled, warning_heat_enabled,
+                           warning_cold_enabled, warning_icing_enabled,
+                           warning_heavy_rain_enabled, warning_thunderstorm_enabled,
+                           warning_strong_wind_enabled, warning_storm_enabled
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -163,6 +226,14 @@ class SQLiteSettingsStore:
             daily_send_time=row[5],
             daily_send_days=row[6],
             urgent_warnings_enabled=bool(row[7]),
+            warning_magnetic_storm_enabled=bool(row[8]),
+            warning_heat_enabled=bool(row[9]),
+            warning_cold_enabled=bool(row[10]),
+            warning_icing_enabled=bool(row[11]),
+            warning_heavy_rain_enabled=bool(row[12]),
+            warning_thunderstorm_enabled=bool(row[13]),
+            warning_strong_wind_enabled=bool(row[14]),
+            warning_storm_enabled=bool(row[15]),
         )
 
     def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
@@ -239,4 +310,43 @@ class SQLiteSettingsStore:
         except (OSError, sqlite3.Error) as exc:
             raise StorageError(
                 "Не удалось сохранить настройку срочных предупреждений."
+            ) from exc
+
+    def save_warning_categories(
+        self,
+        telegram_chat_id: int,
+        enabled_categories: Iterable[str],
+    ) -> None:
+        """Replace all warning-category states for an existing saved city."""
+        try:
+            normalized_categories = normalize_warning_categories(enabled_categories)
+        except (TypeError, ValueError) as exc:
+            raise StorageError("Некорректные категории предупреждений.") from exc
+
+        assignments = ", ".join(
+            f"{column} = ?" for column in WARNING_CATEGORY_COLUMNS.values()
+        )
+        values = [
+            int(category in normalized_categories)
+            for category in WARNING_CATEGORY_COLUMNS
+        ]
+        values.append(telegram_chat_id)
+
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    f"""
+                    UPDATE user_settings
+                    SET {assignments}
+                    WHERE telegram_chat_id = ?
+                    """,
+                    values,
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните город пользователя.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError(
+                "Не удалось сохранить категории предупреждений."
             ) from exc

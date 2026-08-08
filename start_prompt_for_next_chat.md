@@ -222,9 +222,21 @@ https://github.com/MaksimUnimax/openscript-agent-lab-student-kit/blob/main/rules
 - Ввод `yes` отклонён точным сообщением `Некорректный ответ. Введите: Да или Нет.`; процесс продолжил ждать. Затем `Нет` дал `Срочные предупреждения выключены.`, терминал — `Настройка срочных предупреждений сохранена.`, а read-only проверка подтвердила схему с `urgent_warnings_enabled` и строку `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 0)`.
 - Второй запуск того же режима с вводом `Да` дал `Срочные предупреждения включены.` и `Настройка срочных предупреждений сохранена.`; финальная read-only проверка подтвердила строку `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1)`. Оба успешных запуска завершились штатно, итоговое состояние — включено. Telegram chat ID, token и содержимое env не документируются.
 
-## Актуальный stop-point после реального теста срочных предупреждений
+## Историческая запись после реального теста срочных предупреждений
 
 - Город реально проверен; `daily_send_time = 08:30`, `daily_send_days = 1,3,5` и `urgent_warnings_enabled = 1` реально проверены.
 - Контролируемый реальный тест подтвердил invalid `yes` с продолжением ожидания, `Нет -> 0` и `Да -> 1`.
 - Warning categories НЕ реализованы; scheduler, forecast, scheduled sending и systemd НЕ начинались.
 - Следующий безопасный функциональный этап — warning categories согласно `technical_spec.md`; `next_steps.md` отсутствует.
+
+## Историческая запись после реализации persistent warning categories
+
+- Реализованы восемь независимых `warning_*_enabled INTEGER NOT NULL DEFAULT 1` полей в `user_settings`, bool-поля `UserSettings`, идемпотентные add-only migrations и `save_warning_categories()` с ключами `magnetic_storm`, `heat`, `cold`, `icing`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`.
+- Реализован отдельный взаимоисключающийся CLI `--wait-for-warning-categories` с `warning_categories_handler.py`: clear old updates, новая приватная `/start`, lock на chat, filtering групп/других чатов, exact prompt, canonical numeric parsing, exact success/error texts, safe `StorageError` и `KeyboardInterrupt`.
+- 176 автоматических тестов успешно; `python3 -m compileall -q src` успешно. Использованы только временные SQLite-базы и fake/mock Telegram. Реальный Telegram + SQLite-тест категорий ещё НЕ выполнялся.
+
+## Актуальный stop-point после реализации warning-category settings
+
+- Реально проверенное ранее состояние: `city_name = Москва`, `latitude = 55.75204`, `longitude = 37.61781`, `timezone = Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`, `urgent_warnings_enabled = 1`.
+- Warning-category settings реализованы и автоматически проверены; все восемь категорий default enabled. Реальный Telegram-тест категорий ещё НЕ выполнялся.
+- Следующий безопасный шаг после независимого review commit — controlled real Telegram + SQLite category test. Scheduler, forecast, scheduled sending и systemd остаются не начаты. `next_steps.md` отсутствует.

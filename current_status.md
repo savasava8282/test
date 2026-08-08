@@ -205,9 +205,24 @@
 - Второй реальный запуск того же режима показал `Ожидание новой команды /start...`; после новой приватной `/start` получил ввод `Да`. Telegram прислал `Срочные предупреждения включены.`, терминал показал `Настройка срочных предупреждений сохранена.`. Финальная read-only проверка подтвердила схему `['telegram_chat_id', 'city_name', 'latitude', 'longitude', 'timezone', 'daily_send_time', 'daily_send_days', 'urgent_warnings_enabled']` и строку `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1)`.
 - Оба успешных реальных запуска завершились штатно. Тест подтвердил повторное изменение значения `0 -> 1`; итоговое желаемое состояние — срочные предупреждения включены. Telegram chat ID, token и содержимое env не документируются.
 
-## Актуальный stop-point после реального теста срочных предупреждений
+## Историческая запись после реального теста срочных предупреждений
 
 - Город реально проверен; `daily_send_time = 08:30`, `daily_send_days = 1,3,5` и `urgent_warnings_enabled = 1` реально проверены.
 - Контролируемый реальный тест срочных предупреждений подтвердил точный prompt, отклонение английского `yes` с продолжением ожидания, ветку `Нет -> urgent_warnings_enabled = 0` и ветку `Да -> urgent_warnings_enabled = 1`; финальное состояние — включено.
 - Категории предупреждений ещё НЕ реализованы. Scheduler, forecast, scheduled sending и systemd ещё НЕ начинались.
 - Следующий безопасный функциональный этап — warning categories согласно `technical_spec.md`. `next_steps.md` отсутствует.
+
+## Историческая запись после реализации persistent warning categories
+
+- Реализованы восемь независимых полей `warning_magnetic_storm_enabled`, `warning_heat_enabled`, `warning_cold_enabled`, `warning_icing_enabled`, `warning_heavy_rain_enabled`, `warning_thunderstorm_enabled`, `warning_strong_wind_enabled`, `warning_storm_enabled`; каждое имеет SQLite-тип `INTEGER NOT NULL DEFAULT 1`, а `get_user_settings()` возвращает их как Python `bool`.
+- Новая схема создаёт все восемь полей сразу. Существующие схемы мигрируются идемпотентными недеструктивными `ALTER TABLE ... ADD COLUMN`; текущая схема с `daily_send_time`, `daily_send_days` и `urgent_warnings_enabled` получает только недостающие category-поля. Существующие строки и значения сохраняются.
+- Добавлен `save_warning_categories()` со стабильными внутренними ключами `magnetic_storm`, `heat`, `cold`, `icing`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`. Он заменяет только восемь category-полей существующего пользователя, отклоняет неизвестные/неподдерживаемые значения и преобразует ошибки SQLite/OSError в `StorageError`; upsert города сохраняет выбор категорий.
+- Добавлены `warning_categories_handler.py` и взаимоисключающий CLI-режим `--wait-for-warning-categories`: он очищает старые updates, ждёт новую приватную `/start`, блокирует чат, игнорирует группы и другие чаты, проверяет сохранённый город, канонизирует номера и безопасно обрабатывает ошибки и `KeyboardInterrupt`.
+- Полный набор автоматических тестов: 176 тестов успешно; `python3 -m compileall -q src` успешно. SQLite-тесты используют только временные базы, Telegram-тесты — только fake/mock-клиенты. Реальный Telegram + SQLite-тест категорий ещё НЕ выполнялся.
+
+## Актуальный stop-point после реализации warning-category settings
+
+- Реально подтверждённые ранее значения остаются: город `Москва`, координаты `55.75204` / `37.61781`, timezone `Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`, `urgent_warnings_enabled = 1`.
+- Warning-category settings реализованы и автоматически проверены: все восемь категорий по умолчанию включены, storage/migrations/API и `--wait-for-warning-categories` реализованы; реальный Telegram-тест категорий ещё НЕ выполнялся.
+- Следующий безопасный шаг после независимого review commit — контролируемый реальный Telegram + SQLite-тест категорий. Scheduler, forecast, scheduled sending и systemd остаются не начаты.
+- Следующий функциональный этап не начинать; `next_steps.md` отсутствует.

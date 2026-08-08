@@ -5,11 +5,11 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-urgent-warnings` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
 | `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
-| `src/weather_alert_bot/storage.py` | SQLite-хранилище пользовательских настроек | updated | Только `sqlite3`; безопасно мигрирует `daily_send_time`, `daily_send_days` и `urgent_warnings_enabled` с default `07:00`, `1,2,3,4,5,6,7` и `1`, сохраняет upsert города без сброса настроек и отдельно обновляет время, дни или срочные предупреждения по существующему `telegram_chat_id` |
+| `src/weather_alert_bot/storage.py` | SQLite-хранилище пользовательских настроек | updated | Только `sqlite3`; безопасно мигрирует `daily_send_time`, `daily_send_days`, `urgent_warnings_enabled` и восемь `warning_*_enabled` полей с default `07:00`, `1,2,3,4,5,6,7`, `1` и `1`, сохраняет upsert города без сброса настроек и отдельно обновляет время, дни, срочные предупреждения или полный выбор категорий по существующему `telegram_chat_id` |
 | `src/weather_alert_bot/telegram_api.py` | `TelegramClient`, модели данных и безопасный API-слой | updated | Поддерживает `getUpdates`, `sendMessage` и прежний `getMe` |
 | `src/weather_alert_bot/start_handler.py` | Однократное ожидание новой приватной `/start` | created | Очищает старые обновления без ответа, отвечает один раз и завершается; сценарий подтверждён контролируемым реальным запуском |
 | `src/weather_alert_bot/city_handler.py` | Однократный запрос и локальная проверка города после новой `/start` | created | Реальный контролируемый запуск подтверждён; не хранит город, не вызывает внешние API, подтверждает один корректный текст и завершается |
@@ -18,6 +18,7 @@
 | `src/weather_alert_bot/daily_time_handler.py` | Однократная настройка локального времени ежедневной отправки | created | После новой приватной `/start` проверяет сохранённый город, принимает только `HH:MM`, сохраняет время без UTC-конвертации и безопасно завершается; подтверждён автоматическими тестами и одним контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/daily_days_handler.py` | Однократная настройка дней ежедневной отправки | created | После новой приватной `/start` проверяет сохранённый город, принимает канонизируемые номера `1`–`7`, сохраняет дни только для существующей строки и безопасно завершается; подтверждён автоматическими fake/mock-тестами и успешным контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/urgent_warnings_handler.py` | Однократная настройка включения срочных предупреждений | created | После новой приватной `/start` проверяет сохранённый город, принимает `Да`/`Нет` без учёта регистра и с внешними пробелами, сохраняет boolean только для существующей строки и безопасно завершается; подтверждён автоматическими fake/mock-тестами и успешным контролируемым реальным Telegram-тестом |
+| `src/weather_alert_bot/warning_categories_handler.py` | Однократная настройка восьми категорий предупреждений | created | После новой приватной `/start` проверяет сохранённый город, принимает уникальные номера `1`–`8` или `0`, канонизирует выбор, сохраняет полный набор boolean-состояний только для существующей строки и безопасно завершается; автоматически подтверждён fake/mock-тестами, реальный Telegram-тест ещё не выполнялся |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -26,10 +27,11 @@
 | `tests/test_city_handler.py` | Сценарий запроса города, фильтрация, проверка текста и остановка | created | Проверяет старые обновления, новую `/start`, тот же чат, дубли и локальную валидацию |
 | `tests/test_geocoding.py` | Клиент геокодирования, ошибки и CLI-вывод | created | Проверяет запрос, валидацию, JSON, mock-сеть, коды завершения и attribution |
 | `tests/test_geocoded_city_handler.py` | Новый однократный Telegram-сценарий с геокодированием | created | Дополнительные ветки — пустой результат, ошибки, некорректный текст, другой чат, группы и `Ctrl+C` — проверяются только через fake/mock-тесты |
-| `tests/test_storage.py` | Схема, миграция, upsert и изоляция настроек разных Telegram-чатов | updated | Проверяет `daily_send_time`, `daily_send_days`, `urgent_warnings_enabled`, defaults, безопасную миграцию, нормализацию и сохранение настроек; использует только временные SQLite-базы |
+| `tests/test_storage.py` | Схема, миграция, upsert и изоляция настроек разных Telegram-чатов | updated | Проверяет `daily_send_time`, `daily_send_days`, `urgent_warnings_enabled`, все восемь `warning_*_enabled` полей, defaults, безопасную миграцию, нормализацию и сохранение настроек; использует только временные SQLite-базы |
 | `tests/test_daily_time_handler.py` | Однократная настройка времени, валидация и Telegram-фильтрация | created | Проверяет корректные/некорректные значения, старые updates, группы, другой чат, отсутствие города и StorageError через fake/mock без настоящего Telegram token |
 | `tests/test_daily_days_handler.py` | Однократная настройка дней, валидация и Telegram-фильтрация | created | Проверяет defaults, канонизацию, старые updates, группы, другой чат, отсутствие города, точные тексты, StorageError и `Ctrl+C` через fake/mock без настоящего Telegram token |
 | `tests/test_urgent_warnings_handler.py` | Однократная настройка срочных предупреждений, валидация и Telegram-фильтрация | created | Проверяет `Да`/`Нет`, регистр, пробелы, некорректный ввод, старые updates, группы, другой чат, отсутствие города, точные тексты, StorageError и `Ctrl+C` через fake/mock |
+| `tests/test_warning_categories_handler.py` | Однократная настройка категорий, валидация и Telegram-фильтрация | created | Проверяет prompt, all/subset/0, пробелы, канонизацию, все invalid-вводы, продолжение ожидания, старые updates, группы, другой чат, отсутствие города, StorageError и `Ctrl+C` через fake/mock |
 
 ## Исторические границы реализации до commit `3007f15c2b9645de015691c9ceafb4e7a3ad1eeb`
 
@@ -151,9 +153,21 @@
 - Ввод `yes` реально отклонён сообщением `Некорректный ответ. Введите: Да или Нет.`; процесс продолжил ожидание. Ввод `Нет` дал `Срочные предупреждения выключены.`, терминал показал `Настройка срочных предупреждений сохранена.`, а read-only строка стала `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 0)` при схеме с `urgent_warnings_enabled`.
 - Второй запуск того же режима с вводом `Да` дал `Срочные предупреждения включены.` и штатно завершился; финальная read-only схема была `['telegram_chat_id', 'city_name', 'latitude', 'longitude', 'timezone', 'daily_send_time', 'daily_send_days', 'urgent_warnings_enabled']`, строка стала `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1)`. Оба успешных запуска завершились нормально; итоговое состояние — включено. Telegram chat ID, token и содержимое env не документируются.
 
-## Актуальный stop-point после реального теста срочных предупреждений
+## Историческая запись после реального теста срочных предупреждений
 
 - Город, `daily_send_time = 08:30`, `daily_send_days = 1,3,5` и `urgent_warnings_enabled = 1` реально проверены.
 - Контролируемый реальный тест подтвердил invalid `yes` с продолжением ожидания, `Нет -> 0` и `Да -> 1`.
 - Warning categories НЕ реализованы; scheduler, forecast, scheduled sending и systemd НЕ начинались.
 - Следующий безопасный функциональный этап — warning categories согласно `technical_spec.md`; `next_steps.md` отсутствует.
+
+## Историческая запись после реализации persistent warning categories
+
+- `storage.py` добавляет восемь явных `warning_*_enabled INTEGER NOT NULL DEFAULT 1` полей, bool-поля в `UserSettings`, стабильные внутренние category keys и `save_warning_categories()`; миграции идемпотентны, add-only и сохраняют текущие настройки пользователя.
+- Добавлен `warning_categories_handler.py` и взаимоисключающий CLI `--wait-for-warning-categories`. Он принимает уникальные номера `1`–`8` или `0`, отклоняет malformed/duplicate/mixed-zero/text input, выдаёт утверждённые русские тексты и не раскрывает внутренние ошибки.
+- Полный набор автоматических тестов: 176 тестов успешно; `python3 -m compileall -q src` успешно. Использованы только временные SQLite-базы и fake/mock Telegram. Реальный Telegram-тест категорий ещё НЕ выполнялся.
+
+## Актуальный stop-point после реализации warning-category settings
+
+- Реально подтверждены ранее: `Москва`, `55.75204`, `37.61781`, `Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`, `urgent_warnings_enabled = 1`.
+- Восемь category settings, defaults, migrations, storage API и `--wait-for-warning-categories` реализованы и автоматически проверены; реальный Telegram + SQLite-тест категорий ещё НЕ выполнялся.
+- Следующий безопасный шаг после независимого review commit — контролируемый реальный Telegram + SQLite-тест категорий. Scheduler, forecast, scheduled sending и systemd остаются не начаты; `next_steps.md` отсутствует.
