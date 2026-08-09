@@ -360,5 +360,8 @@
 ## Актуальный stop-point после реализации warning-category settings
 
 - Реально проверенные ранее значения: город `Москва`, latitude `55.75204`, longitude `37.61781`, timezone `Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`, `urgent_warnings_enabled = 1`.
-- Восемь warning-category settings, default enabled, storage/migrations/API и `--wait-for-warning-categories` реализованы и автоматически проверены; REAL Telegram + SQLite category test ещё НЕ выполнялся.
-- Следующий безопасный шаг после независимого review commit — controlled real Telegram + SQLite category test. Scheduler, forecast, scheduled sending и systemd остаются не начаты; `next_steps.md` отсутствует.
+- Восемь warning-category settings, default enabled, storage/migrations/API и `--wait-for-warning-categories` реализованы, автоматически проверены и подтверждены реальным Telegram + SQLite-тестом.
+- До миграции в реальной SQLite отсутствовали все восемь category-колонок; старые значения сохранены. Backup `~/.local/share/weather-alert-bot/settings.before-warning-categories.sqlite3` проверен через `cmp`: `Backup OK`.
+- Реальный режим выполнялся командой `set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-warning-categories`. Новая приватная `/start` показала prompt выбора категорий; `1,1` получил точную ошибку `Некорректные категории. Введите уникальные номера от 1 до 8 через запятую или 0, чтобы отключить все.`, после чего ожидание продолжилось.
+- Реально подтверждены сохранение `8,1,3` с ответом `Категории предупреждений сохранены: Магнитная буря, Холод, Шторм.`, ветка `0` с ответом `Все категории предупреждений отключены.` и включение всех восьми через `1,2,3,4,5,6,7,8`; все три one-shot запуска завершились штатно. Финальная SQLite-строка: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
+- Единый актуальный stop-point: все восемь категорий включены; scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` не создавать.
