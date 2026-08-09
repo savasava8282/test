@@ -6,6 +6,7 @@ from weather_alert_bot.city_handler import run_until_city
 from weather_alert_bot.config import ConfigError, load_settings
 from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.daily_days_handler import run_until_daily_days
+from weather_alert_bot.daily_sending_handler import run_until_daily_sending
 from weather_alert_bot.daily_time_handler import run_until_daily_time
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
@@ -56,6 +57,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="настроить дни ежедневной отправки для сохранённого города",
     )
     telegram_group.add_argument(
+        "--wait-for-daily-sending",
+        action="store_true",
+        help="включить или выключить ежедневную рассылку для сохранённого города",
+    )
+    telegram_group.add_argument(
         "--wait-for-urgent-warnings",
         action="store_true",
         help="настроить срочные предупреждения для сохранённого города",
@@ -86,6 +92,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_daily_time()
     if args.wait_for_daily_days:
         return _wait_for_daily_days()
+    if args.wait_for_daily_sending:
+        return _wait_for_daily_sending()
     if args.wait_for_urgent_warnings:
         return _wait_for_urgent_warnings()
     if args.wait_for_warning_categories:
@@ -196,6 +204,26 @@ def _wait_for_daily_days() -> int:
         return 1
     except TelegramApiError:
         print("Ошибка настройки дней ежедневной отправки.", file=sys.stderr)
+        return 1
+
+
+def _wait_for_daily_sending() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        storage = SQLiteSettingsStore(settings.db_path)
+        return run_until_daily_sending(telegram_client, storage)
+    except ConfigError:
+        print("Ошибка настройки ежедневной рассылки.", file=sys.stderr)
+        return 1
+    except StorageError:
+        print("Ошибка настройки ежедневной рассылки.", file=sys.stderr)
+        return 1
+    except TelegramApiError:
+        print("Ошибка настройки ежедневной рассылки.", file=sys.stderr)
         return 1
 
 

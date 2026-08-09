@@ -365,3 +365,11 @@
 - Реальный режим выполнялся командой `set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-warning-categories`. Новая приватная `/start` показала prompt выбора категорий; `1,1` получил точную ошибку `Некорректные категории. Введите уникальные номера от 1 до 8 через запятую или 0, чтобы отключить все.`, после чего ожидание продолжилось.
 - Реально подтверждены сохранение `8,1,3` с ответом `Категории предупреждений сохранены: Магнитная буря, Холод, Шторм.`, ветка `0` с ответом `Все категории предупреждений отключены.` и включение всех восьми через `1,2,3,4,5,6,7,8`; все три one-shot запуска завершились штатно. Финальная SQLite-строка: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
 - Единый актуальный stop-point: все восемь категорий включены; scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` не создавать.
+
+## Актуальная запись после реализации persistent daily-sending setting
+
+- Реализовано отдельное поле `daily_sending_enabled INTEGER NOT NULL DEFAULT 1`; `UserSettings` читает SQLite `0/1` как Python `False/True`. Add-only migration существующей схемы идемпотентна и сохраняет все прежние настройки.
+- Добавлен `save_daily_sending_enabled()`, принимающий только настоящий `bool` и изменяющий только daily-sending state существующего пользователя с сохранённым городом. Повторный `save_confirmed_city()` state не сбрасывает.
+- Добавлены `daily_sending_handler.py`, `run_until_daily_sending()` и взаимоисключающий CLI `--wait-for-daily-sending`; обработаны prompt, `Да`/`Нет`, invalid input, chat filtering, old updates, missing city, StorageError и Ctrl+C.
+- Полный набор автоматических тестов: 196 успешно; тесты используют только временные SQLite-базы и fake/mock Telegram. Реальный Telegram + SQLite-тест этого setting ещё НЕ выполнялся.
+- Единый stop-point: следующий безопасный шаг — только контролируемый реальный Telegram + SQLite-тест daily-sending setting. Scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` отсутствует.

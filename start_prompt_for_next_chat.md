@@ -242,3 +242,10 @@ https://github.com/MaksimUnimax/openscript-agent-lab-student-kit/blob/main/rules
 - Ввод `8,1,3` дал `Категории предупреждений сохранены: Магнитная буря, Холод, Шторм.` и терминальное `Категории предупреждений сохранены.`; SQLite показала `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 0, 1, 0, 0, 0, 0, 1)`, то есть включены только `magnetic_storm`, `cold`, `storm`.
 - Отдельный ввод `0` дал `Все категории предупреждений отключены.`, штатное завершение и все восемь нулей при неизменных остальных настройках. Ввод `1,2,3,4,5,6,7,8` включил все категории и завершился штатно; финальная SQLite-проверка: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
 - Единый актуальный stop-point: реальный one-shot режим, безопасная миграция, валидация ошибки, подмножество, ветка `0` и полный набор подтверждены; финальное состояние базы — все восемь категорий включены. Не начинать scheduler, forecast, scheduled sending, systemd или следующую функциональную стадию. `next_steps.md` не создавать.
+
+## Актуальная запись после реализации persistent daily-sending setting
+
+- Реализованы `daily_sending_enabled INTEGER NOT NULL DEFAULT 1`, `UserSettings.daily_sending_enabled`, `save_daily_sending_enabled()`, `daily_sending_handler.py`, `run_until_daily_sending()` и CLI `--wait-for-daily-sending`.
+- Новая схема создаёт колонку сразу, старая мигрируется только добавлением отсутствующей колонки; migration идемпотентна, старые строки и настройки сохраняются. Повторный `save_confirmed_city()` daily-sending state не сбрасывает.
+- Полный набор автоматических тестов: 196 успешно. Настоящий Telegram и реальная пользовательская SQLite для нового setting не использовались; применялись только временные базы и fake/mock.
+- Единственный текущий stop-point: следующий безопасный шаг — контролируемый реальный Telegram + SQLite-тест daily-sending setting с отдельным backup перед тестом. Scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` отсутствует.

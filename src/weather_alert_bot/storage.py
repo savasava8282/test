@@ -15,6 +15,7 @@ class StorageError(RuntimeError):
 
 DAILY_SEND_TIME_DEFAULT = "07:00"
 DAILY_SEND_DAYS_DEFAULT = "1,2,3,4,5,6,7"
+DAILY_SENDING_ENABLED_DEFAULT = True
 URGENT_WARNINGS_ENABLED_DEFAULT = True
 WARNING_CATEGORY_DEFAULT = True
 WARNING_CATEGORY_KEYS: tuple[str, ...] = (
@@ -101,6 +102,7 @@ class UserSettings:
     warning_thunderstorm_enabled: bool = WARNING_CATEGORY_DEFAULT
     warning_strong_wind_enabled: bool = WARNING_CATEGORY_DEFAULT
     warning_storm_enabled: bool = WARNING_CATEGORY_DEFAULT
+    daily_sending_enabled: bool = DAILY_SENDING_ENABLED_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -115,6 +117,7 @@ class SQLiteSettingsStore:
             timezone TEXT NOT NULL,
             daily_send_time TEXT NOT NULL DEFAULT '07:00',
             daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7',
+            daily_sending_enabled INTEGER NOT NULL DEFAULT 1,
             urgent_warnings_enabled INTEGER NOT NULL DEFAULT 1,
             warning_magnetic_storm_enabled INTEGER NOT NULL DEFAULT 1,
             warning_heat_enabled INTEGER NOT NULL DEFAULT 1,
@@ -149,6 +152,13 @@ class SQLiteSettingsStore:
                         """
                         ALTER TABLE user_settings
                         ADD COLUMN daily_send_days TEXT NOT NULL DEFAULT '1,2,3,4,5,6,7'
+                        """
+                    )
+                if "daily_sending_enabled" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE user_settings
+                        ADD COLUMN daily_sending_enabled INTEGER NOT NULL DEFAULT 1
                         """
                     )
                 if "urgent_warnings_enabled" not in columns:
@@ -206,7 +216,8 @@ class SQLiteSettingsStore:
                            warning_magnetic_storm_enabled, warning_heat_enabled,
                            warning_cold_enabled, warning_icing_enabled,
                            warning_heavy_rain_enabled, warning_thunderstorm_enabled,
-                           warning_strong_wind_enabled, warning_storm_enabled
+                           warning_strong_wind_enabled, warning_storm_enabled,
+                           daily_sending_enabled
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -234,6 +245,7 @@ class SQLiteSettingsStore:
             warning_thunderstorm_enabled=bool(row[13]),
             warning_strong_wind_enabled=bool(row[14]),
             warning_storm_enabled=bool(row[15]),
+            daily_sending_enabled=bool(row[16]),
         )
 
     def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
@@ -310,6 +322,34 @@ class SQLiteSettingsStore:
         except (OSError, sqlite3.Error) as exc:
             raise StorageError(
                 "Не удалось сохранить настройку срочных предупреждений."
+            ) from exc
+
+    def save_daily_sending_enabled(
+        self,
+        telegram_chat_id: int,
+        enabled: bool,
+    ) -> None:
+        """Update daily-sending preference for an existing saved city only."""
+        if type(enabled) is not bool:
+            raise StorageError("Настройка ежедневной рассылки должна быть boolean.")
+
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_settings
+                    SET daily_sending_enabled = ?
+                    WHERE telegram_chat_id = ?
+                    """,
+                    (int(enabled), telegram_chat_id),
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните город пользователя.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError(
+                "Не удалось сохранить настройку ежедневной рассылки."
             ) from exc
 
     def save_warning_categories(

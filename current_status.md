@@ -259,3 +259,12 @@
 ### Единый актуальный stop-point
 
 Реальная SQLite-база мигрирована и проверена, старые настройки сохранены, все восемь категорий предупреждений включены. Не начинать scheduler, forecast, scheduled sending, systemd или следующую функциональную стадию. `next_steps.md` не создавать.
+
+## Актуальный stop-point после реализации persistent daily-sending setting
+
+- В `user_settings` добавлено поле `daily_sending_enabled INTEGER NOT NULL DEFAULT 1`. Новая база создаёт его сразу; существующие схемы получают только отсутствующую колонку через идемпотентный недеструктивный `ALTER TABLE ... ADD COLUMN`. Строки и прежние значения сохраняются.
+- `UserSettings.daily_sending_enabled` возвращает SQLite `0/1` как Python `False/True`. API `save_daily_sending_enabled()` принимает только настоящий `bool`, обновляет только существующего пользователя с сохранённым городом и преобразует SQLite/OSError в безопасный `StorageError`. Повторный `save_confirmed_city()` не сбрасывает значение.
+- Добавлены `daily_sending_handler.py`, `run_until_daily_sending()` и взаимоисключающий CLI `--wait-for-daily-sending`. Режим очищает старые updates, принимает новую приватную `/start` или `/start@weather_storm_alert_bot`, игнорирует группы и другие чаты, проверяет город, принимает только «Да»/«Нет» без учёта регистра и внешних пробелов, продолжает ожидание после ошибки и безопасно завершает one-shot процесс.
+- Полный набор автоматических тестов: 196 тестов успешно. SQLite использует только временные базы, Telegram — только fake/mock. `python3 -m compileall -q src` и `git diff --check` выполнены успешно.
+- Реальный Telegram + SQLite-тест нового daily-sending setting ЕЩЁ НЕ выполнялся. Следующий безопасный шаг — только контролируемый реальный Telegram + SQLite-тест daily-sending setting с отдельным backup перед ним.
+- Scheduler, forecast, scheduled sending и systemd по-прежнему не начинать. `next_steps.md` отсутствует. Это единственный текущий stop-point.
