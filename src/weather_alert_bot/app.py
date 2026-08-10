@@ -12,6 +12,7 @@ from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
+from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient
 from weather_alert_bot.urgent_warnings_handler import run_until_urgent_warnings
 from weather_alert_bot.warning_categories_handler import run_until_warning_categories
@@ -72,6 +73,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="настроить категории предупреждений для сохранённого города",
     )
     telegram_group.add_argument(
+        "--wait-for-settings-summary",
+        action="store_true",
+        help="показать итоговые настройки сохранённого города",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -98,6 +104,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_urgent_warnings()
     if args.wait_for_warning_categories:
         return _wait_for_warning_categories()
+    if args.wait_for_settings_summary:
+        return _wait_for_settings_summary()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -264,6 +272,26 @@ def _wait_for_warning_categories() -> int:
         return 1
     except TelegramApiError:
         print("Ошибка настройки категорий предупреждений.", file=sys.stderr)
+        return 1
+
+
+def _wait_for_settings_summary() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        storage = SQLiteSettingsStore(settings.db_path)
+        return run_until_settings_summary(telegram_client, storage)
+    except ConfigError:
+        print("Ошибка показа итоговых настроек.", file=sys.stderr)
+        return 1
+    except StorageError:
+        print("Ошибка показа итоговых настроек.", file=sys.stderr)
+        return 1
+    except TelegramApiError:
+        print("Ошибка показа итоговых настроек.", file=sys.stderr)
         return 1
 
 

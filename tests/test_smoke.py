@@ -446,6 +446,70 @@ class SmokeTest(unittest.TestCase):
         storage_type.assert_called_once()
         handler.assert_called_once_with(client_type.return_value, storage_type.return_value)
 
+    def test_wait_for_settings_summary_without_token_fails_safely(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                return_code = main(["--wait-for-settings-summary"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Ошибка показа итоговых настроек", stderr.getvalue())
+        self.assertNotIn("123456789:TEST_TOKEN_NOT_REAL", stderr.getvalue())
+
+    def test_wait_for_settings_summary_wires_client_storage_and_handler(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"TELEGRAM_BOT_TOKEN": "123456789:TEST_TOKEN_NOT_REAL"},
+            clear=True,
+        ):
+            with patch("weather_alert_bot.app.TelegramClient") as client_type:
+                with patch("weather_alert_bot.app.SQLiteSettingsStore") as storage_type:
+                    with patch(
+                        "weather_alert_bot.app.run_until_settings_summary",
+                        return_value=0,
+                    ) as handler:
+                        return_code = main(["--wait-for-settings-summary"])
+
+        self.assertEqual(return_code, 0)
+        client_type.assert_called_once_with("123456789:TEST_TOKEN_NOT_REAL")
+        storage_type.assert_called_once()
+        handler.assert_called_once_with(client_type.return_value, storage_type.return_value)
+
+    def test_settings_summary_is_mutually_exclusive_with_existing_modes(self) -> None:
+        for argument in (
+            "--check-telegram",
+            "--wait-for-start",
+            "--wait-for-city",
+            "--wait-for-geocoded-city",
+            "--wait-for-confirmed-city",
+            "--wait-for-daily-time",
+            "--wait-for-daily-days",
+            "--wait-for-daily-sending",
+            "--wait-for-urgent-warnings",
+            "--wait-for-warning-categories",
+            "--geocode-city",
+        ):
+            arguments = ["--wait-for-settings-summary", argument]
+            if argument == "--geocode-city":
+                arguments.append("Москва")
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(SystemExit) as raised:
+                    main(arguments)
+                self.assertEqual(raised.exception.code, 2)
+
+    def test_help_contains_wait_for_settings_summary(self) -> None:
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as raised:
+                main(["--help"])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("--wait-for-settings-summary", output.getvalue())
+
     def test_daily_sending_is_mutually_exclusive_with_all_one_shot_modes(self) -> None:
         for argument in (
             "--check-telegram",
