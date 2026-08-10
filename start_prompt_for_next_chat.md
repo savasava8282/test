@@ -235,17 +235,31 @@ https://github.com/MaksimUnimax/openscript-agent-lab-student-kit/blob/main/rules
 - Реализован отдельный взаимоисключающийся CLI `--wait-for-warning-categories` с `warning_categories_handler.py`: clear old updates, новая приватная `/start`, lock на chat, filtering групп/других чатов, exact prompt, canonical numeric parsing, exact success/error texts, safe `StorageError` и `KeyboardInterrupt`.
 - 176 автоматических тестов успешно; `python3 -m compileall -q src` успешно. Использованы только временные SQLite-базы и fake/mock Telegram. Реальный Telegram + SQLite-тест категорий ещё НЕ выполнялся.
 
-## Актуальный stop-point после реализации warning-category settings
+## Исторический stop-point после реализации warning-category settings
 
 - Реальная SQLite миграция warning categories успешно завершена: до миграции отсутствовали все восемь category-колонок, а старые настройки `Москва`, `55.75204`, `37.61781`, `Europe/Moscow`, `08:30`, `1,3,5`, `urgent_warnings_enabled = 1` сохранились. Backup `~/.local/share/weather-alert-bot/settings.before-warning-categories.sqlite3` подтверждён через `cmp` сообщением `Backup OK`.
 - Реальный режим запускался командой `set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-warning-categories`. После новой приватной `/start` бот показал prompt выбора категорий. `1,1` был отклонён точным сообщением `Некорректные категории. Введите уникальные номера от 1 до 8 через запятую или 0, чтобы отключить все.`, затем процесс продолжил ждать.
 - Ввод `8,1,3` дал `Категории предупреждений сохранены: Магнитная буря, Холод, Шторм.` и терминальное `Категории предупреждений сохранены.`; SQLite показала `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 0, 1, 0, 0, 0, 0, 1)`, то есть включены только `magnetic_storm`, `cold`, `storm`.
 - Отдельный ввод `0` дал `Все категории предупреждений отключены.`, штатное завершение и все восемь нулей при неизменных остальных настройках. Ввод `1,2,3,4,5,6,7,8` включил все категории и завершился штатно; финальная SQLite-проверка: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
-- Единый актуальный stop-point: реальный one-shot режим, безопасная миграция, валидация ошибки, подмножество, ветка `0` и полный набор подтверждены; финальное состояние базы — все восемь категорий включены. Не начинать scheduler, forecast, scheduled sending, systemd или следующую функциональную стадию. `next_steps.md` не создавать.
+- Исторический stop-point на тот момент: реальный one-shot режим, безопасная миграция, валидация ошибки, подмножество, ветка `0` и полный набор подтверждены; финальное состояние базы — все восемь категорий включены. Не начинать scheduler, forecast, scheduled sending, systemd или следующую функциональную стадию. `next_steps.md` не создавать.
 
-## Актуальная запись после реализации persistent daily-sending setting
+## Историческая запись перед реальным тестом persistent daily-sending setting
 
 - Реализованы `daily_sending_enabled INTEGER NOT NULL DEFAULT 1`, `UserSettings.daily_sending_enabled`, `save_daily_sending_enabled()`, `daily_sending_handler.py`, `run_until_daily_sending()` и CLI `--wait-for-daily-sending`.
 - Новая схема создаёт колонку сразу, старая мигрируется только добавлением отсутствующей колонки; migration идемпотентна, старые строки и настройки сохраняются. Повторный `save_confirmed_city()` daily-sending state не сбрасывает.
-- Полный набор автоматических тестов: 196 успешно. Настоящий Telegram и реальная пользовательская SQLite для нового setting не использовались; применялись только временные базы и fake/mock.
-- Единственный текущий stop-point: следующий безопасный шаг — контролируемый реальный Telegram + SQLite-тест daily-sending setting с отдельным backup перед тестом. Scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` отсутствует.
+- Полный набор автоматических тестов: 196 успешно. На тот момент настоящий Telegram и реальная пользовательская SQLite для нового setting не использовались; применялись только временные базы и fake/mock.
+- Исторический stop-point: следующим безопасным шагом был контролируемый реальный Telegram + SQLite-тест daily-sending setting с отдельным backup перед тестом. Scheduler, forecast, scheduled sending и systemd не начинать. `next_steps.md` отсутствует.
+
+## Актуальная точка для следующего чата: после реального теста daily sending
+
+Не разрабатывать новую функциональность в рамках этой записи. Реализация `daily_sending_enabled` завершена; ранее успешно пройдены 196 автоматических тестов, а теперь также завершён контролируемый реальный Telegram + SQLite-тест.
+
+- До миграции в `user_settings` отсутствовала колонка `daily_sending_enabled`. Колонки были: `['telegram_chat_id', 'city_name', 'latitude', 'longitude', 'timezone', 'daily_send_time', 'daily_send_days', 'urgent_warnings_enabled', 'warning_magnetic_storm_enabled', 'warning_heat_enabled', 'warning_cold_enabled', 'warning_icing_enabled', 'warning_heavy_rain_enabled', 'warning_thunderstorm_enabled', 'warning_strong_wind_enabled', 'warning_storm_enabled']`.
+- Исходные настройки: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1)`. Backup: `~/.local/share/weather-alert-bot/settings.before-daily-sending.sqlite3`; `cmp` дал `Backup OK`.
+- Точная команда реального one-shot запуска: `set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-daily-sending`.
+- После новой `/start` бот отправил `Включить ежедневную рассылку? По умолчанию — включена. Ответьте: Да или Нет.`; терминал показал `Команда /start получена.` и `Ожидание настройки ежедневной рассылки...`.
+- Ввод `yes` получил `Некорректный ответ. Введите: Да или Нет.`, ожидание продолжилось. Ввод `Нет` дал `Ежедневная рассылка выключена.`, терминал — `Настройка ежедневной рассылки сохранена.`, после чего one-shot штатно завершился. SQLite: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 0, 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
+- Повторный запуск той же командой с ответом `Да` дал `Ежедневная рассылка включена.` и `Настройка ежедневной рассылки сохранена.`; one-shot снова штатно завершился. Финальная SQLite: `('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)`.
+- Подтверждены миграция без потери данных, некорректный ввод с продолжением ожидания, ветки `Нет -> 0` и `Да -> 1`, штатное завершение one-shot и сохранение всех старых значений: Москва, координаты `55.75204` / `37.61781`, `Europe/Moscow`, `08:30`, `1,3,5`, `urgent_warnings_enabled = 1` и все 8 warning category flags = `1`.
+
+Текущий stop-point находится ПОСЛЕ успешного реального теста daily sending. Scheduler, получение прогноза, scheduled sending и systemd всё ещё НЕ начаты и НЕ реализованы. Не объявлять следующий функциональный этап завершённым. `next_steps.md` не создавать.
