@@ -298,3 +298,35 @@ set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src pytho
 Полный набор автоматических тестов завершён: 214 успешно пройденных тестов; `python3 -m compileall -q src` успешен. Пункт 10 первоначальной настройки из `technical_spec.md` — показ итоговых настроек — подтверждён. Пункт 11 автоматически завершённым не объявлять; onboarding целиком пока не завершён.
 
 Текущий stop-point: не переходить автоматически к scheduler. Получение прогноза, scheduled sending и systemd ещё не начинались и не реализованы. `next_steps.md` не создавать.
+
+## Историческая точка после реализации финального подтверждения onboarding, до реального теста
+
+Реализовано финальное подтверждение пункта 11 первоначальной настройки. `technical_spec.md` не изменялся.
+
+- Добавлено add-only поле SQLite `user_settings.onboarding_completed INTEGER NOT NULL DEFAULT 0`; `0` означает незавершённый onboarding, `1` — подтверждение итоговых настроек и завершение onboarding.
+- Добавлено bool-поле `UserSettings.onboarding_completed` и API `mark_onboarding_completed(telegram_chat_id)`. API обновляет только completion flag существующего пользователя с сохранённым городом, повторный вызов безопасен, SQLite/OSError преобразуются в `StorageError`.
+- `save_confirmed_city()` сохраняет уже установленный `onboarding_completed = 1`.
+- Добавлены `onboarding_complete_handler.py`, `run_until_onboarding_complete()` и взаимоисключающий CLI `--wait-for-onboarding-complete`. Handler очищает старые updates, ждёт новую приватную `/start` или `/start@weather_storm_alert_bot`, игнорирует группы/другие чаты, повторно использует `format_settings_summary()`, спрашивает точный вопрос подтверждения и обрабатывает `Да`, `Нет`, invalid, отсутствие города, StorageError и KeyboardInterrupt.
+- Полный `unittest`: 236 тестов успешно; `python3 -m compileall -q src` успешно. Автотесты используют только временные SQLite и fake/mock Telegram.
+- Исторический stop-point находился перед реальным Telegram + SQLite-тестом; onboarding реально подтверждённым не объявлялся.
+
+## Актуальная точка для следующего чата: onboarding реально завершён
+
+Финальное подтверждение пункта 11 первоначальной настройки успешно проверено контролируемым реальным Telegram + SQLite-тестом. `technical_spec.md` не изменялся.
+
+- До миграции `onboarding_completed` отсутствовал в реальной таблице `user_settings`.
+- Существующие реальные настройки: город `Москва`, latitude `55.75204`, longitude `37.61781`, timezone `Europe/Moscow`, `daily_send_time = 08:30`, `daily_send_days = 1,3,5`, `daily_sending_enabled = 1`, `urgent_warnings_enabled = 1`, все восемь warning category flags = `1`.
+- Перед миграцией создан backup `~/.local/share/weather-alert-bot/settings.before-onboarding-complete.sqlite3`; `cmp` подтвердил `Backup OK`.
+- Запуск выполнялся командой `set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-onboarding-complete`.
+- Первый запуск с новой приватной `/start`: итоговая сводка → точный вопрос `Сохранить эти настройки и завершить первоначальную настройку? Ответьте: Да или Нет.` → ответ `Нет` → `Первоначальная настройка не завершена.` → штатное завершение. После миграции SQLite показала `onboarding_completed = 0`, остальные настройки не изменились.
+- Второй запуск с новой приватной `/start` и ответом `Да` дал `Настройки сохранены. Первоначальная настройка завершена.`; терминал показал `Команда /start получена.`, `Ожидание подтверждения завершения первоначальной настройки...` и `Первоначальная настройка завершена.`; one-shot штатно завершился.
+- Финальная read-only SQLite показала:
+
+  ```text
+  ('Москва', 55.75204, 37.61781, 'Europe/Moscow', '08:30', '1,3,5', 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+  ```
+
+  То есть `onboarding_completed = 1`, а остальные настройки сохранены без изменений. Ветки `Нет -> 0` и `Да -> 1`, миграция и пункт 11 подтверждены реально; первоначальная настройка onboarding считается завершённой и реально подтверждённой.
+- До реального теста успешно пройдены 236 автоматических тестов; `python3 -m compileall -q src` успешно; `git diff --check` был чистым.
+
+Следующий stop-point: onboarding завершён и реально подтверждён. Не переходить автоматически к scheduler без отдельного выбора следующего архитектурного этапа. Scheduler, forecast, scheduled sending и systemd не начинались. `next_steps.md` отсутствует и создавать его не нужно.

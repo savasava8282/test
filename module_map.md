@@ -5,11 +5,11 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-daily-sending`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories`, `--wait-for-settings-summary` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-daily-sending`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories`, `--wait-for-settings-summary`, `--wait-for-onboarding-complete` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
 | `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
-| `src/weather_alert_bot/storage.py` | SQLite-хранилище пользовательских настроек | updated | Только `sqlite3`; безопасно мигрирует `daily_send_time`, `daily_send_days`, `daily_sending_enabled`, `urgent_warnings_enabled` и восемь `warning_*_enabled` полей с default `07:00`, `1,2,3,4,5,6,7`, `1`, `1` и `1`, сохраняет upsert города без сброса настроек и отдельно обновляет время, дни, daily sending, срочные предупреждения или полный выбор категорий по существующему `telegram_chat_id` |
+| `src/weather_alert_bot/storage.py` | SQLite-хранилище пользовательских настроек | updated | Только `sqlite3`; безопасно мигрирует `daily_send_time`, `daily_send_days`, `daily_sending_enabled`, `urgent_warnings_enabled`, восемь `warning_*_enabled` полей и `onboarding_completed` с default `07:00`, `1,2,3,4,5,6,7`, `1`, `1`, `1` и `0`, сохраняет upsert города без сброса настроек и отдельно обновляет время, дни, daily sending, срочные предупреждения, категории или completion flag по существующему `telegram_chat_id` |
 | `src/weather_alert_bot/telegram_api.py` | `TelegramClient`, модели данных и безопасный API-слой | updated | Поддерживает `getUpdates`, `sendMessage` и прежний `getMe` |
 | `src/weather_alert_bot/start_handler.py` | Однократное ожидание новой приватной `/start` | created | Очищает старые обновления без ответа, отвечает один раз и завершается; сценарий подтверждён контролируемым реальным запуском |
 | `src/weather_alert_bot/city_handler.py` | Однократный запрос и локальная проверка города после новой `/start` | created | Реальный контролируемый запуск подтверждён; не хранит город, не вызывает внешние API, подтверждает один корректный текст и завершается |
@@ -21,6 +21,7 @@
 | `src/weather_alert_bot/urgent_warnings_handler.py` | Однократная настройка включения срочных предупреждений | created | После новой приватной `/start` проверяет сохранённый город, принимает `Да`/`Нет` без учёта регистра и с внешними пробелами, сохраняет boolean только для существующей строки и безопасно завершается; подтверждён автоматическими fake/mock-тестами и успешным контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/warning_categories_handler.py` | Однократная настройка восьми категорий предупреждений | created | После новой приватной `/start` проверяет сохранённый город, принимает уникальные номера `1`–`8` или `0`, канонизирует выбор, сохраняет полный набор boolean-состояний только для существующей строки и безопасно завершается; подтверждён автоматическими fake/mock-тестами и реальным Telegram + SQLite-тестом |
 | `src/weather_alert_bot/settings_summary_handler.py` | Однократная read-only итоговая сводка сохранённых onboarding-настроек | created | После новой приватной `/start` читает существующий `UserSettings`, отправляет стабильную сводку без записи в SQLite и безопасно завершается; автоматически проверен и подтверждён контролируемым реальным Telegram-тестом |
+| `src/weather_alert_bot/onboarding_complete_handler.py` | Однократное финальное подтверждение и завершение первоначальной настройки | created | После новой приватной `/start` повторно показывает `format_settings_summary()`, принимает `Да`/`Нет`, при `Да` вызывает `mark_onboarding_completed()`, при `Нет` не меняет SQLite; автоматически проверен и подтверждён контролируемым реальным Telegram + SQLite-тестом обеих веток |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -37,6 +38,16 @@
 | `tests/test_daily_sending_handler.py` | Однократная настройка daily sending, валидация и Telegram-фильтрация | created | Проверяет prompt, `Да`/`Нет`, регистр, пробелы, invalid с продолжением, очистку updates, группы, другой чат, отсутствие города, StorageError и `Ctrl+C` через fake/mock |
 
 | `tests/test_settings_summary_handler.py` | Итоговая read-only сводка настроек и Telegram-фильтрация | created | Проверяет стабильный формат, дни, boolean-состояния, все/часть/ноль категорий, неизменность SQLite, очистку updates, группы, другой чат, отсутствие пользователя, StorageError и `Ctrl+C` через временную SQLite и fake/mock |
+| `tests/test_onboarding_complete_handler.py` | Финальное подтверждение onboarding в Telegram | created | Проверяет summary-before-prompt, `Да`/`Нет`, регистр/пробелы, invalid continuation, updates, filtering, отсутствие города, StorageError и `KeyboardInterrupt` через временную SQLite и fake/mock |
+| `tests/test_onboarding_storage.py` | Completion flag, add-only migration и storage API | created | Проверяет default `0`, миграцию только новой колонки, сохранение данных, идемпотентность, `0 -> 1`, отсутствие создания строки и сохранение флага при upsert города |
+| `tests/test_onboarding_complete_cli.py` | CLI-режим финального подтверждения | created | Проверяет token-safe wiring, storage error, help и взаимоисключение с каждым существующим one-shot режимом и `--geocode-city` |
+
+## Актуальный runtime-статус onboarding
+
+- Контролируемый реальный Telegram + SQLite-тест `--wait-for-onboarding-complete` успешно завершён.
+- Реальная миграция добавила `onboarding_completed` после backup `~/.local/share/weather-alert-bot/settings.before-onboarding-complete.sqlite3`; `cmp` подтвердил `Backup OK`.
+- Реально подтверждены обе ветки: `Нет -> onboarding_completed = 0` без изменения остальных настроек и `Да -> onboarding_completed = 1` с успешным сообщением и штатным завершением one-shot.
+- Автоматические тесты до реального теста: 236 успешно; `python3 -m compileall -q src` успешно. Scheduler, forecast, scheduled sending и systemd не начинались. `next_steps.md` отсутствует.
 
 ## Исторические границы реализации до commit `3007f15c2b9645de015691c9ceafb4e7a3ad1eeb`
 

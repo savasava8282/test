@@ -16,6 +16,7 @@ class StorageError(RuntimeError):
 DAILY_SEND_TIME_DEFAULT = "07:00"
 DAILY_SEND_DAYS_DEFAULT = "1,2,3,4,5,6,7"
 DAILY_SENDING_ENABLED_DEFAULT = True
+ONBOARDING_COMPLETED_DEFAULT = False
 URGENT_WARNINGS_ENABLED_DEFAULT = True
 WARNING_CATEGORY_DEFAULT = True
 WARNING_CATEGORY_KEYS: tuple[str, ...] = (
@@ -103,6 +104,7 @@ class UserSettings:
     warning_strong_wind_enabled: bool = WARNING_CATEGORY_DEFAULT
     warning_storm_enabled: bool = WARNING_CATEGORY_DEFAULT
     daily_sending_enabled: bool = DAILY_SENDING_ENABLED_DEFAULT
+    onboarding_completed: bool = ONBOARDING_COMPLETED_DEFAULT
 
 
 class SQLiteSettingsStore:
@@ -126,7 +128,8 @@ class SQLiteSettingsStore:
             warning_heavy_rain_enabled INTEGER NOT NULL DEFAULT 1,
             warning_thunderstorm_enabled INTEGER NOT NULL DEFAULT 1,
             warning_strong_wind_enabled INTEGER NOT NULL DEFAULT 1,
-            warning_storm_enabled INTEGER NOT NULL DEFAULT 1
+            warning_storm_enabled INTEGER NOT NULL DEFAULT 1,
+            onboarding_completed INTEGER NOT NULL DEFAULT 0
         )
     """
 
@@ -176,6 +179,13 @@ class SQLiteSettingsStore:
                             ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1
                             """
                         )
+                if "onboarding_completed" not in columns:
+                    connection.execute(
+                        """
+                        ALTER TABLE user_settings
+                        ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0
+                        """
+                    )
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось инициализировать хранилище.") from exc
 
@@ -217,7 +227,7 @@ class SQLiteSettingsStore:
                            warning_cold_enabled, warning_icing_enabled,
                            warning_heavy_rain_enabled, warning_thunderstorm_enabled,
                            warning_strong_wind_enabled, warning_storm_enabled,
-                           daily_sending_enabled
+                           daily_sending_enabled, onboarding_completed
                     FROM user_settings
                     WHERE telegram_chat_id = ?
                     """,
@@ -246,7 +256,31 @@ class SQLiteSettingsStore:
             warning_strong_wind_enabled=bool(row[14]),
             warning_storm_enabled=bool(row[15]),
             daily_sending_enabled=bool(row[16]),
+            onboarding_completed=bool(row[17]),
         )
+
+    def mark_onboarding_completed(self, telegram_chat_id: int) -> None:
+        """Mark onboarding complete for an existing saved city only."""
+        try:
+            with sqlite3.connect(self.path) as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE user_settings
+                    SET onboarding_completed = 1
+                    WHERE telegram_chat_id = ?
+                      AND city_name IS NOT NULL
+                      AND TRIM(city_name) <> ''
+                    """,
+                    (telegram_chat_id,),
+                )
+                if cursor.rowcount != 1:
+                    raise StorageError("Сначала сохраните подтверждённый город.")
+        except StorageError:
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError(
+                "Не удалось завершить первоначальную настройку."
+            ) from exc
 
     def save_daily_send_time(self, telegram_chat_id: int, daily_send_time: str) -> None:
         """Update the local daily send time for an existing saved city only."""
