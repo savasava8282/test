@@ -361,3 +361,51 @@ Onboarding полностью завершён и подтверждён реа�
 - До real API-теста: 255 автоматических тестов успешно, compileall успешно, `git diff --check` чистый, secrets/`.env`/SQLite/backup отсутствовали в Git, `next_steps.md` отсутствовал. Автоматические тесты после реального запроса не запускались.
 
 Weather forecast data layer подтверждён на реальном API. Форматирование пользовательской ежедневной Telegram-сводки, магнитные бури/Kp, климатическая норма, weather warning logic, scheduler, scheduled sending и systemd ещё НЕ реализованы/не начинались. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; к scheduler автоматически не переходить. `technical_spec.md` не изменять. `next_steps.md` отсутствует и создавать его не нужно.
+
+## Историческая точка до первого real NOAA-теста и исправления Kp response format
+
+Onboarding завершён, weather forecast data layer подтверждён реальным Open-Meteo API. Добавлен следующий изолированный dependency-layer — официальный NOAA SWPC прогноз планетарного индекса Kp:
+
+- `src/weather_alert_bot/geomagnetic_forecast.py` использует только официальный `services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json`.
+- Добавлены immutable-модели всего прогноза и одного интервала, сохраняющие timestamp начала, Kp, status/type и optional issue/update time, если колонка есть в источнике.
+- Header табличного JSON валидируется по именам колонок; malformed rows, обязательные значения, timestamp, Kp, NaN/Infinity, диапазон Kp и empty data не пропускаются молча.
+- Добавлен безопасный `GeomagneticForecastError` и one-shot `--fetch-kp-forecast`, который не требует Telegram token, не открывает SQLite и печатает компактный diagnostic output без сырого JSON.
+- Полный `unittest discover`: 271 тест успешно; `python3 -m compileall -q src` успешно. Реальный NOAA SWPC запрос новым кодом ещё НЕ выполнялся.
+
+Следующий stop-point — только контролируемый реальный `--fetch-kp-forecast` с официальным NOAA SWPC API. Telegram daily summary, G-level/warning logic, climate norms, weather warning logic, scheduler, scheduled sending и systemd ещё НЕ реализованы. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; к scheduler автоматически не переходить. `technical_spec.md` не изменять. `next_steps.md` отсутствует и создавать его не нужно.
+
+## Историческая точка: Kp parser исправлен после первого real test, до повторной проверки
+
+Первый запуск `PYTHONPATH=src python3 -m weather_alert_bot --fetch-kp-forecast` завершился `Ошибка получения прогноза Kp NOAA SWPC.`. Endpoint отдельно ответил HTTP 200 с `application/json`; фактический response оказался `list[dict]` из 81 записей, а не tabular `list[list]` с header. Это была причина ошибки.
+
+- `src/weather_alert_bot/geomagnetic_forecast.py` исправлен на фактический object-list формат NOAA.
+- Обязательны `time_tag`, numeric `kp` и строковый `observed`; `noaa_scale = null` принимается, строковый `noaa_scale` сохраняется без G-level/warning logic.
+- Timestamp остаётся naive, если NOAA не передал timezone; Kp `2.33` сохраняется дробным.
+- Success fixtures переведены на actual object-list; добавлены regression tests для `2026-08-04T00:00:00`/`4.0` и `2026-08-04T09:00:00`/`2.33`, плюс строгие malformed cases.
+- После fix: 273 автоматических теста успешно, compileall успешно. Повторный реальный NOAA SWPC запуск после fix ЕЩЁ НЕ выполнялся.
+
+Текущий stop-point — только повторный контролируемый `--fetch-kp-forecast`. Kp layer не объявлять real-tested до успешного повторного запуска. Telegram daily summary, G-level/warning logic, climate norms, weather warning logic, scheduler, scheduled sending и systemd не реализованы. `technical_spec.md` не изменять. `next_steps.md` не создавать.
+
+## Актуальная точка для следующего чата: weather и Kp data layers подтверждены реальными API
+
+После исправления parser на фактический NOAA object-list формат успешно выполнен повторный контролируемый запуск:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --fetch-kp-forecast
+```
+
+Процесс завершился штатно. Полный diagnostic output:
+
+```text
+Источник: NOAA SWPC
+Количество интервалов: 81
+Первый timestamp: 2026-08-04 00:00:00
+Последний timestamp: 2026-08-14 00:00:00
+Первый Kp: 4
+Максимальный Kp: 5.67
+Статусы: estimated=3, observed=61, predicted=17
+```
+
+История этапа: первоначальный parser прошёл автоматические тесты, но первый real-test завершился `GeomagneticForecastError`; endpoint отдельно отвечал `200 application/json`; фактический response был `list[dict]` с `time_tag`, `kp`, `observed`, `noaa_scale`; parser и fixtures были исправлены; после исправления пройдены 273 автоматических теста. Повторный real-test подтвердил object-list parsing, timestamp, дробные Kp, статусы и 81 интервал. CLI не требует Telegram и не использует SQLite.
+
+Weather forecast data layer и Kp forecast data layer подтверждены реальными API. Telegram daily summary, `/today`, G1–G5 warning/business logic, пользовательский Kp threshold, NOAA watches/warnings/alerts, climate norms, weather warning logic, scheduler, scheduled sending и systemd ещё НЕ реализованы. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; автоматически переходить к нему нельзя. `technical_spec.md` не изменять. `next_steps.md` не создавать.

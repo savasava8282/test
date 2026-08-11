@@ -10,6 +10,10 @@ from weather_alert_bot.daily_sending_handler import run_until_daily_sending
 from weather_alert_bot.daily_time_handler import run_until_daily_time
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
+from weather_alert_bot.geomagnetic_forecast import (
+    GeomagneticForecastError,
+    NoaaSwpcGeomagneticClient,
+)
 from weather_alert_bot.onboarding_complete_handler import run_until_onboarding_complete
 from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
@@ -93,6 +97,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="получить диагностический прогноз для единственного сохранённого города",
     )
     telegram_group.add_argument(
+        "--fetch-kp-forecast",
+        action="store_true",
+        help="получить диагностический прогноз планетарного индекса Kp NOAA SWPC",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -125,6 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_onboarding_complete()
     if args.fetch_weather_forecast:
         return _fetch_weather_forecast()
+    if args.fetch_kp_forecast:
+        return _fetch_kp_forecast()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -373,6 +384,36 @@ def _fetch_weather_forecast() -> int:
     print(f"Максимальный ветер: {first_day.wind_speed_10m_max:g}")
     print(f"Максимальные порывы: {first_day.wind_gusts_10m_max:g}")
     print(f"Почасовых значений: {len(forecast.hourly)}")
+    return 0
+
+
+def _fetch_kp_forecast() -> int:
+    try:
+        forecast = NoaaSwpcGeomagneticClient().fetch()
+    except GeomagneticForecastError:
+        print("Ошибка получения прогноза Kp NOAA SWPC.", file=sys.stderr)
+        return 1
+
+    intervals = forecast.intervals
+    first = intervals[0]
+    last = intervals[-1]
+    status_counts: dict[str, int] = {}
+    for interval in intervals:
+        if interval.status is not None:
+            status_counts[interval.status] = status_counts.get(interval.status, 0) + 1
+
+    print("Источник: NOAA SWPC")
+    print(f"Количество интервалов: {len(intervals)}")
+    print(f"Первый timestamp: {first.timestamp.isoformat(sep=' ')}")
+    print(f"Последний timestamp: {last.timestamp.isoformat(sep=' ')}")
+    print(f"Первый Kp: {first.kp:g}")
+    print(f"Максимальный Kp: {max(interval.kp for interval in intervals):g}")
+    if status_counts:
+        breakdown = ", ".join(
+            f"{status}={status_counts[status]}"
+            for status in sorted(status_counts)
+        )
+        print(f"Статусы: {breakdown}")
     return 0
 
 
