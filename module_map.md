@@ -238,3 +238,25 @@ Daily-sending implementation и контролируемый реальный Te
 - Отдельная byte-for-byte проверка SQLite после запуска не выполнялась; реальный тест подтверждает Telegram-сценарий, а не независимое сравнение базы.
 - Пункт 10 первоначальной настройки — показ итоговых настроек — подтверждён; пункт 11 и onboarding целиком автоматически завершёнными не объявлять.
 - Полный набор автоматических тестов — 214 успешных тестов; `python3 -m compileall -q src` успешно. Scheduler, forecast, scheduled sending и systemd не начинать; `next_steps.md` отсутствует.
+
+## Историческая запись после добавления weather forecast data layer, до реального Open-Meteo-теста
+
+- `src/weather_alert_bot/weather_forecast.py` — изолированный Open-Meteo Weather Forecast API client: запрос на 5 суток с сохранёнными координатами и timezone, безопасный разбор daily/hourly ответа, immutable-модели `WeatherForecast`, `DailyForecast`, `HourlyForecast` и `WeatherForecastError`.
+- `src/weather_alert_bot/storage.py` — добавлен read-only режим `SQLiteSettingsStore(..., read_only=True)` и `get_single_user_settings()` для диагностического сценария единственного владельца; при нескольких строках выдаётся безопасная `StorageError`.
+- `src/weather_alert_bot/app.py` — добавлен взаимоисключающий `--fetch-weather-forecast`; он читает config/SQLite, вызывает weather client с сохранёнными latitude/longitude/timezone и печатает только компактные диагностические поля.
+- `tests/test_weather_forecast.py` — mock HTTP, параметры URL, timezone, `forecast_days=5`, модели и безопасное отклонение некорректных ответов/ошибок.
+- `tests/test_weather_forecast_cli.py` — read-only storage API, единственный/отсутствующий/неоднозначный владелец, wiring CLI, неизменность SQLite, безопасная ошибка weather client и взаимоисключение действий.
+- Всего автоматически пройдено 255 тестов; `technical_spec.md` не изменён; `next_steps.md` отсутствует.
+- Реальный Open-Meteo-запрос новым кодом ещё не выполнялся. Telegram weather summary, Kp, scheduler, scheduled sending и systemd не реализованы.
+
+Следующий stop-point: только контролируемая реальная проверка `--fetch-weather-forecast` с Open-Meteo. Следующий архитектурный этап не выбирать автоматически.
+
+## Актуальное состояние после успешно завершённого реального Open-Meteo-теста
+
+- `src/weather_alert_bot/weather_forecast.py` реально выполнил запрос Open-Meteo для сохранённого города `Москва` и timezone `Europe/Moscow`; получены 5 daily-дней и 120 hourly-значений (`5 × 24`). Daily и hourly данные успешно разобраны.
+- `src/weather_alert_bot/app.py` — `--fetch-weather-forecast` вывел компактные обработанные поля: город, timezone, число дней, первую дату, min/max, осадки, ветер, порывы и количество hourly points. Сырой JSON не выводился.
+- Реальная SQLite `~/.local/share/weather-alert-bot/settings.sqlite3` не изменилась: SHA-256 до запроса `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, после запроса — та же `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`.
+- Реальный Telegram-запрос в рамках weather forecast теста не выполнялся. До теста были зафиксированы 255 успешных автоматических тестов, успешный compileall, чистый `git diff --check`, отсутствие secrets/`.env`/SQLite/backup-файлов в Git и отсутствие `next_steps.md`; автоматические тесты после real API не запускались.
+- Форматирование пользовательской ежедневной Telegram-сводки, магнитные бури/Kp, климатическая норма, weather warning logic, scheduler, scheduled sending и systemd ещё не реализованы.
+
+Следующий stop-point: weather layer подтверждён на реальном API. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; к scheduler автоматически не переходить.

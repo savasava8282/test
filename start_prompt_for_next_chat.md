@@ -330,3 +330,34 @@ set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src pytho
 - До реального теста успешно пройдены 236 автоматических тестов; `python3 -m compileall -q src` успешно; `git diff --check` был чистым.
 
 Следующий stop-point: onboarding завершён и реально подтверждён. Не переходить автоматически к scheduler без отдельного выбора следующего архитектурного этапа. Scheduler, forecast, scheduled sending и systemd не начинались. `next_steps.md` отсутствует и создавать его не нужно.
+
+## Историческая точка до контролируемого реального Open-Meteo-теста weather layer
+
+Onboarding полностью завершён и подтверждён реальным Telegram + SQLite-тестом. Реализован только первый изолированный слой прогноза для уже сохранённого города:
+
+- `src/weather_alert_bot/weather_forecast.py` выполняет запрос Open-Meteo на 5 суток с сохранёнными latitude, longitude и timezone и запрашивает обязательные daily/hourly значения.
+- Добавлены immutable dataclass-модели пятидневного прогноза, дня и hourly point; сырой JSON не передаётся дальше как основной интерфейс.
+- Добавлен безопасный `WeatherForecastError` для HTTP/network/timeout/malformed JSON/обязательных полей, массивов, чисел и timestamp.
+- Добавлен read-only `SQLiteSettingsStore.get_single_user_settings()` и взаимоисключающий CLI `--fetch-weather-forecast`. CLI не меняет SQLite, не использует Telegram и не выбирает произвольную строку при неоднозначном storage.
+- Автоматические тесты: 255 успешно; `python3 -m compileall -q src` успешно. Реальный Open-Meteo-запрос новым кодом ещё НЕ выполнялся.
+
+Следующий stop-point — только контролируемый реальный Open-Meteo-тест `--fetch-weather-forecast`. Не выполнять его автоматически в рамках этой записи. Telegram weather summary, Kp, предупреждения, scheduler, scheduled sending и systemd не реализованы; к scheduler автоматически не переходить. `technical_spec.md` не изменять. `next_steps.md` отсутствует и создавать его не нужно.
+
+## Актуальная точка для следующего чата: weather layer подтверждён на реальном API
+
+Контролируемый реальный Open-Meteo-тест `--fetch-weather-forecast` успешно завершён.
+
+- Команда запуска:
+
+  ```text
+  set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --fetch-weather-forecast
+  ```
+
+- Использованы сохранённые город `Москва` и timezone `Europe/Moscow`.
+- Получено 5 дней прогноза, первая дата `2026-08-11`, и 120 hourly points (`5 × 24`). Daily и hourly значения успешно разобраны новым `weather_forecast.py`.
+- Реальный компактный вывод включал: первый день min `15.5`, max `25.1`, вероятность осадков `78%`, сумму осадков `1.1`, максимальный ветер `14.7`, максимальные порывы `43.9` и 120 hourly values. Сырой JSON не выводился.
+- SHA-256 SQLite `~/.local/share/weather-alert-bot/settings.sqlite3` до и после запроса одинакова: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`. Пользовательские настройки не изменились; режим read-only подтверждён на реальной базе.
+- Реальный Telegram-запрос в рамках этого теста не выполнялся.
+- До real API-теста: 255 автоматических тестов успешно, compileall успешно, `git diff --check` чистый, secrets/`.env`/SQLite/backup отсутствовали в Git, `next_steps.md` отсутствовал. Автоматические тесты после реального запроса не запускались.
+
+Weather forecast data layer подтверждён на реальном API. Форматирование пользовательской ежедневной Telegram-сводки, магнитные бури/Kp, климатическая норма, weather warning logic, scheduler, scheduled sending и systemd ещё НЕ реализованы/не начинались. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; к scheduler автоматически не переходить. `technical_spec.md` не изменять. `next_steps.md` отсутствует и создавать его не нужно.

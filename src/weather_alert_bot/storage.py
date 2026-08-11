@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 from collections.abc import Iterable, Mapping
+from urllib.parse import quote
 
 from weather_alert_bot.geocoding import GeocodingLocation
 
@@ -34,6 +35,16 @@ WARNING_CATEGORY_COLUMNS = {
 }
 _DAILY_SEND_TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d\Z")
 _DAILY_SEND_DAY_PATTERN = re.compile(r"[1-7]\Z")
+_USER_SETTINGS_SELECT = """
+    SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
+           daily_send_time, daily_send_days, urgent_warnings_enabled,
+           warning_magnetic_storm_enabled, warning_heat_enabled,
+           warning_cold_enabled, warning_icing_enabled,
+           warning_heavy_rain_enabled, warning_thunderstorm_enabled,
+           warning_strong_wind_enabled, warning_storm_enabled,
+           daily_sending_enabled, onboarding_completed
+    FROM user_settings
+"""
 
 
 def normalize_daily_send_time(value: str) -> str:
@@ -133,11 +144,17 @@ class SQLiteSettingsStore:
         )
     """
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
         self.path = Path(path).expanduser()
+        self._read_only = read_only
         try:
+            if self._read_only:
+                with self._connect() as connection:
+                    connection.execute("SELECT 1 FROM user_settings").fetchone()
+                return
+
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 connection.execute(self._TABLE_SCHEMA)
                 columns = {
                     row[1]
@@ -189,10 +206,16 @@ class SQLiteSettingsStore:
         except (OSError, sqlite3.Error) as exc:
             raise StorageError("Не удалось инициализировать хранилище.") from exc
 
+    def _connect(self) -> sqlite3.Connection:
+        if not self._read_only:
+            return sqlite3.connect(self.path)
+        database_uri = f"file:{quote(str(self.path.resolve()), safe='/')}?mode=ro"
+        return sqlite3.connect(database_uri, uri=True)
+
     def save_confirmed_city(self, telegram_chat_id: int, candidate: GeocodingLocation) -> None:
         """Insert or update the confirmed candidate for one Telegram chat."""
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 connection.execute(
                     """
                     INSERT INTO user_settings (
@@ -218,19 +241,9 @@ class SQLiteSettingsStore:
     def get_user_settings(self, telegram_chat_id: int) -> UserSettings | None:
         """Return settings for a chat, primarily for diagnostics and tests."""
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 row = connection.execute(
-                    """
-                    SELECT telegram_chat_id, city_name, latitude, longitude, timezone,
-                           daily_send_time, daily_send_days, urgent_warnings_enabled,
-                           warning_magnetic_storm_enabled, warning_heat_enabled,
-                           warning_cold_enabled, warning_icing_enabled,
-                           warning_heavy_rain_enabled, warning_thunderstorm_enabled,
-                           warning_strong_wind_enabled, warning_storm_enabled,
-                           daily_sending_enabled, onboarding_completed
-                    FROM user_settings
-                    WHERE telegram_chat_id = ?
-                    """,
+                    _USER_SETTINGS_SELECT + "WHERE telegram_chat_id = ?",
                     (telegram_chat_id,),
                 ).fetchone()
         except (OSError, sqlite3.Error) as exc:
@@ -238,6 +251,26 @@ class SQLiteSettingsStore:
 
         if row is None:
             return None
+        return self._settings_from_row(row)
+
+    def get_single_user_settings(self) -> UserSettings | None:
+        """Return the only saved user, or fail safely if storage is ambiguous."""
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(_USER_SETTINGS_SELECT).fetchall()
+        except (OSError, sqlite3.Error) as exc:
+            raise StorageError("Не удалось прочитать настройки города.") from exc
+
+        if len(rows) > 1:
+            raise StorageError(
+                "Хранилище содержит настройки нескольких пользователей."
+            )
+        if not rows:
+            return None
+        return self._settings_from_row(rows[0])
+
+    @staticmethod
+    def _settings_from_row(row: tuple[object, ...]) -> UserSettings:
         return UserSettings(
             telegram_chat_id=row[0],
             city_name=row[1],
@@ -262,7 +295,7 @@ class SQLiteSettingsStore:
     def mark_onboarding_completed(self, telegram_chat_id: int) -> None:
         """Mark onboarding complete for an existing saved city only."""
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE user_settings
@@ -290,7 +323,7 @@ class SQLiteSettingsStore:
             raise StorageError("Некорректное время ежедневной отправки.") from exc
 
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE user_settings
@@ -314,7 +347,7 @@ class SQLiteSettingsStore:
             raise StorageError("Некорректные дни ежедневной отправки.") from exc
 
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE user_settings
@@ -340,7 +373,7 @@ class SQLiteSettingsStore:
             raise StorageError("Настройка срочных предупреждений должна быть boolean.")
 
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE user_settings
@@ -368,7 +401,7 @@ class SQLiteSettingsStore:
             raise StorageError("Настройка ежедневной рассылки должна быть boolean.")
 
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     """
                     UPDATE user_settings
@@ -407,7 +440,7 @@ class SQLiteSettingsStore:
         values.append(telegram_chat_id)
 
         try:
-            with sqlite3.connect(self.path) as connection:
+            with self._connect() as connection:
                 cursor = connection.execute(
                     f"""
                     UPDATE user_settings

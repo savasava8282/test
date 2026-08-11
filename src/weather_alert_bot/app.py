@@ -17,6 +17,10 @@ from weather_alert_bot.start_handler import run_until_start
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient
 from weather_alert_bot.urgent_warnings_handler import run_until_urgent_warnings
 from weather_alert_bot.warning_categories_handler import run_until_warning_categories
+from weather_alert_bot.weather_forecast import (
+    OpenMeteoWeatherClient,
+    WeatherForecastError,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -84,6 +88,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="подтвердить итоговые настройки и завершить первоначальную настройку",
     )
     telegram_group.add_argument(
+        "--fetch-weather-forecast",
+        action="store_true",
+        help="получить диагностический прогноз для единственного сохранённого города",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -114,6 +123,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_settings_summary()
     if args.wait_for_onboarding_complete:
         return _wait_for_onboarding_complete()
+    if args.fetch_weather_forecast:
+        return _fetch_weather_forecast()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -321,6 +332,48 @@ def _wait_for_onboarding_complete() -> int:
     except TelegramApiError:
         print("Ошибка завершения первоначальной настройки.", file=sys.stderr)
         return 1
+
+
+def _fetch_weather_forecast() -> int:
+    try:
+        settings = load_settings(require_telegram_token=False)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        user_settings = storage.get_single_user_settings()
+        if user_settings is None:
+            print("Сохранённый город не найден.", file=sys.stderr)
+            return 1
+
+        forecast = OpenMeteoWeatherClient().fetch(
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+    except (ConfigError, StorageError):
+        print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
+        return 1
+    except WeatherForecastError:
+        print("Ошибка получения прогноза погоды.", file=sys.stderr)
+        return 1
+
+    first_day = forecast.daily[0]
+    print(f"Город: {user_settings.city_name}")
+    print(f"Часовой пояс: {user_settings.timezone}")
+    print(f"Дней прогноза: {len(forecast.daily)}")
+    print(f"Первая дата: {first_day.date.isoformat()}")
+    print(
+        "Первый день: "
+        f"min={first_day.temperature_2m_min:g}, "
+        f"max={first_day.temperature_2m_max:g}"
+    )
+    print(
+        "Максимальная вероятность осадков: "
+        f"{first_day.precipitation_probability_max:g}%"
+    )
+    print(f"Сумма осадков: {first_day.precipitation_sum:g}")
+    print(f"Максимальный ветер: {first_day.wind_speed_10m_max:g}")
+    print(f"Максимальные порывы: {first_day.wind_gusts_10m_max:g}")
+    print(f"Почасовых значений: {len(forecast.hourly)}")
+    return 0
 
 
 def _check_telegram() -> int:
