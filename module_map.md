@@ -5,7 +5,7 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-daily-sending`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories`, `--wait-for-settings-summary`, `--wait-for-onboarding-complete` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-daily-sending`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories`, `--wait-for-settings-summary`, `--wait-for-onboarding-complete`, `--wait-for-today` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
 | `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
@@ -22,6 +22,7 @@
 | `src/weather_alert_bot/warning_categories_handler.py` | Однократная настройка восьми категорий предупреждений | created | После новой приватной `/start` проверяет сохранённый город, принимает уникальные номера `1`–`8` или `0`, канонизирует выбор, сохраняет полный набор boolean-состояний только для существующей строки и безопасно завершается; подтверждён автоматическими fake/mock-тестами и реальным Telegram + SQLite-тестом |
 | `src/weather_alert_bot/settings_summary_handler.py` | Однократная read-only итоговая сводка сохранённых onboarding-настроек | created | После новой приватной `/start` читает существующий `UserSettings`, отправляет стабильную сводку без записи в SQLite и безопасно завершается; автоматически проверен и подтверждён контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/onboarding_complete_handler.py` | Однократное финальное подтверждение и завершение первоначальной настройки | created | После новой приватной `/start` повторно показывает `format_settings_summary()`, принимает `Да`/`Нет`, при `Да` вызывает `mark_onboarding_completed()`, при `Нет` не меняет SQLite; автоматически проверен и подтверждён контролируемым реальным Telegram + SQLite-тестом обеих веток |
+| `src/weather_alert_bot/today_handler.py` | Однократная обработка новой приватной `/today` владельца | created | Читает единственного владельца через переданное read-only storage, очищает старые updates без ответа, проверяет chat ID и onboarding, после корректной команды вызывает существующие weather/Kp clients и daily summary builder/formatter, отправляет один результат и завершается; real Telegram/API-тест ещё не выполнялся |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -41,6 +42,8 @@
 | `tests/test_onboarding_complete_handler.py` | Финальное подтверждение onboarding в Telegram | created | Проверяет summary-before-prompt, `Да`/`Нет`, регистр/пробелы, invalid continuation, updates, filtering, отсутствие города, StorageError и `KeyboardInterrupt` через временную SQLite и fake/mock |
 | `tests/test_onboarding_storage.py` | Completion flag, add-only migration и storage API | created | Проверяет default `0`, миграцию только новой колонки, сохранение данных, идемпотентность, `0 -> 1`, отсутствие создания строки и сохранение флага при upsert города |
 | `tests/test_onboarding_complete_cli.py` | CLI-режим финального подтверждения | created | Проверяет token-safe wiring, storage error, help и взаимоисключение с каждым существующим one-shot режимом и `--geocode-city` |
+| `tests/test_today_handler.py` | One-shot `/today`, owner validation, data clients, formatter, ошибки и read-only поведение | created | Проверяет очистку старых updates, обе формы команды, private/group/чужие chats, onboarding, `daily_sending_enabled = 0`, safe errors, Telegram errors, fixed aware time, завершение и неизменность SQLite через fake/mock и временные базы |
+| `tests/test_today_cli.py` | CLI-режим `--wait-for-today` | created | Проверяет обязательный token, read-only storage, existing clients, current aware datetime, help, safe storage error и mutual exclusion со всеми actions |
 
 ## Актуальный runtime-статус onboarding
 
@@ -347,3 +350,43 @@ Weather forecast data layer и Kp forecast data layer подтверждены �
 - Base daily summary preview подтверждён реальными Open-Meteo + NOAA данными. `/today`, Telegram `sendMessage` для этой сводки, постоянный polling, climate norms, risk/warning logic, температурные пользовательские пороги, G1–G5 magnetic business logic, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё не реализованы.
 
 Следующий архитектурный этап должен быть отдельно выбран техническим лидом.
+
+## Актуальная запись после успешно завершённого controlled real Telegram `/today`
+
+- `src/weather_alert_bot/today_handler.py` — one-shot `/today` реально принял новую private-команду сохранённого владельца, выполнил weather и NOAA запросы, использовал существующие builder/formatter, отправил одну сводку через `sendMessage` и завершился штатно.
+- Реальный Linux CLI transcript:
+
+  ```text
+  Ожидание новой команды /today...
+  Команда /today получена.
+  Сводка /today отправлена.
+  ```
+
+- Реальный Telegram summary:
+
+  ```text
+  Москва
+  📅 12 августа 2026
+
+  Погода: ливневый дождь
+  Температура: +13.3…+17.9 °C
+  Утром: +15.6 °C
+  Днём: +17.3 °C
+
+  Осадки: до 55%, наиболее вероятно около 13:00
+  За сутки: 1.8 мм
+
+  Ветер: до 15.1 км/ч
+  Порывы: до 47.2 км/ч
+
+  Магнитная активность: Kp до 2 в ближайшие 24 ч
+
+  Сводка сформирована: 12.08.2026 06:38
+  ```
+
+- До controlled real-test было 315 успешных автоматических тестов. Настоящий `/today` принят от сохранённого владельца, новая private-команда обработана, процесс завершился после одной команды.
+- SHA-256 реальной SQLite до и после byte-for-byte совпала: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; production one-shot остался read-only.
+- Weather values, включая precipitation `до 55%, наиболее вероятно около 13:00`, не считаются постоянными: более ранний отдельный real preview дал `до 53%, наиболее вероятно около 08:00`. Это разные запросы в разное время, не ошибка реализации.
+- Реальные negative scenarios другого chat ID/group/onboarding error этим запуском не проверялись; они подтверждены автоматическими тестами. Постоянный production polling loop не реализован.
+
+One-shot `/today` теперь подтверждён real Telegram + Open-Meteo + NOAA test. Следующий архитектурный этап выбирается отдельно техническим лидом.

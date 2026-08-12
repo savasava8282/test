@@ -24,6 +24,7 @@ from weather_alert_bot.onboarding_complete_handler import run_until_onboarding_c
 from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
+from weather_alert_bot.today_handler import run_until_today
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient
 from weather_alert_bot.urgent_warnings_handler import run_until_urgent_warnings
 from weather_alert_bot.warning_categories_handler import run_until_warning_categories
@@ -113,6 +114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="сформировать диагностическую ежедневную сводку без Telegram",
     )
     telegram_group.add_argument(
+        "--wait-for-today",
+        action="store_true",
+        help="дождаться одной новой команды /today владельца и отправить сводку",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -149,6 +155,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _fetch_kp_forecast()
     if args.preview_daily_summary:
         return _preview_daily_summary()
+    if args.wait_for_today:
+        return _wait_for_today()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -464,6 +472,28 @@ def _preview_daily_summary() -> int:
         return 1
     except DailySummaryError:
         print("Ошибка формирования ежедневной сводки.", file=sys.stderr)
+        return 1
+
+
+def _wait_for_today() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        weather_client = OpenMeteoWeatherClient()
+        geomagnetic_client = NoaaSwpcGeomagneticClient()
+        return run_until_today(
+            telegram_client,
+            storage,
+            weather_client,
+            geomagnetic_client,
+            datetime.now(timezone.utc),
+        )
+    except (ConfigError, StorageError, TelegramApiError):
+        print("Ошибка обработки команды /today.", file=sys.stderr)
         return 1
 
 

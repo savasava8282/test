@@ -472,3 +472,79 @@ Base daily summary preview теперь считается подтверждё�
 Актуальный stop-point: `Weather forecast data layer, Kp forecast data layer и base daily summary preview подтверждены реальными данными/API. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.`
 
 `technical_spec.md` не изменять. `next_steps.md` не создавать. Новый Open-Meteo/NOAA/Telegram запрос в следующем documentation/final verification pass не выполнять. Не выбирать следующий архитектурный этап самостоятельно.
+
+## Актуальная точка для следующего чата: one-shot `/today` реализован
+
+Добавлен отдельный режим:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --wait-for-today
+```
+
+Реализован `src/weather_alert_bot/today_handler.py`. Он получает единственного владельца через read-only SQLite, очищает старые updates без ответа, принимает только новую private-команду `/today` или `/today@weather_storm_alert_bot` с сохранённым `telegram_chat_id`, затем вызывает существующие Open-Meteo weather client, NOAA SWPC Kp client, `build_daily_summary(...)`, `format_daily_summary(...)` и отправляет ровно одну сводку в тот же chat. После успешной отправки one-shot завершается.
+
+Группы, другой chat ID и другой текст игнорируются; для чужого chat ID weather/Kp запросы не выполняются. `onboarding_completed` должен быть `1`; `daily_sending_enabled = 0` не блокирует ручной `/today`. SQLite открывается только read-only, схема не меняется. В entry point передаётся явное aware UTC-время. Ошибки и `KeyboardInterrupt` обрабатываются безопасно, без raw exception details.
+
+Полный автоматический набор после реализации: **315 тестов успешно**. Проверены handler, owner/filtering, очистка updates, formatter byte-for-byte, safe errors, Telegram errors, read-only SQLite, fixed aware time, CLI token/wiring/help/mutual exclusion и сохранение работы `--preview-daily-summary`.
+
+Реальный `/today` в Telegram ещё НЕ тестировался. Новый реальный Open-Meteo или NOAA запрос для этого режима не выполнялся.
+
+Актуальный stop-point: только controlled real `/today` на существующих настройках. Scheduler, постоянный polling, scheduled sending и systemd не начинать автоматически; следующий архитектурный этап отдельно выбирает технический лидер.
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. Commit и push не выполнять без отдельного указания.
+
+## Актуальная точка для следующего чата: one-shot `/today` подтверждён real Telegram test
+
+После автоматической реализации были выполнены 315 успешных тестов. Затем production one-shot mode был реально запущен:
+
+```text
+set -a; source /root/.config/weather-alert-bot/env; set +a; PYTHONPATH=src python3 -m weather_alert_bot --wait-for-today
+```
+
+Новая private-команда `/today` успешно принята от сохранённого владельца. Реально использованы существующий Telegram API client, сохранённый owner/chat ID, настройки города `Москва`, Open-Meteo weather data layer, NOAA SWPC Kp data layer, `build_daily_summary(...)`, `format_daily_summary(...)` и Telegram `sendMessage`. Выполнены настоящий Open-Meteo и настоящий NOAA SWPC requests. После одной успешной команды процесс штатно завершился.
+
+Фактический Linux CLI transcript:
+
+```text
+Ожидание новой команды /today...
+Команда /today получена.
+Сводка /today отправлена.
+```
+
+Фактический Telegram summary:
+
+```text
+Москва
+📅 12 августа 2026
+
+Погода: ливневый дождь
+Температура: +13.3…+17.9 °C
+Утром: +15.6 °C
+Днём: +17.3 °C
+
+Осадки: до 55%, наиболее вероятно около 13:00
+За сутки: 1.8 мм
+
+Ветер: до 15.1 км/ч
+Порывы: до 47.2 км/ч
+
+Магнитная активность: Kp до 2 в ближайшие 24 ч
+
+Сводка сформирована: 12.08.2026 06:38
+```
+
+SHA-256 реальной SQLite `~/.local/share/weather-alert-bot/settings.sqlite3` до и после совпала byte-for-byte:
+
+```text
+dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424
+```
+
+Production one-shot `/today` не изменил SQLite и остался read-only. Более ранний отдельный real preview дал `до 53%, наиболее вероятно около 08:00`, а `/today` — `до 55%, наиболее вероятно около 13:00`; это разные реальные запросы в разное время, weather values не постоянны и это не ошибка реализации.
+
+Реальные negative scenarios другого chat ID/group/onboarding error этим запуском не проверялись; они подтверждены автоматическими тестами. Постоянный production polling loop не существует.
+
+Ограничения: текущий `/today` — one-shot diagnostic/production validation mode; постоянный production bot loop, scheduler, scheduled daily sending, systemd, climate norms, warning/risk logic, temperature threshold business logic, G1–G5 magnetic business logic, NOAA watches/warnings/alerts, event storage/dedup/update lifecycle, Telegram buttons и полноценная command routing architecture ещё не реализованы.
+
+Актуальный stop-point: `Weather forecast data layer, Kp forecast data layer, base daily summary preview и one-shot Telegram /today подтверждены реальными API/Telegram. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.`
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. Новый real Telegram/Open-Meteo/NOAA test в этой documentation/final verification pass не выполнять. Не выбирать следующий архитектурный этап самостоятельно.
