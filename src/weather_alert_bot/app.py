@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime, timezone
 import sys
 from collections.abc import Sequence
 
@@ -8,6 +9,11 @@ from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.daily_days_handler import run_until_daily_days
 from weather_alert_bot.daily_sending_handler import run_until_daily_sending
 from weather_alert_bot.daily_time_handler import run_until_daily_time
+from weather_alert_bot.daily_summary import (
+    DailySummaryError,
+    build_daily_summary,
+    format_daily_summary,
+)
 from weather_alert_bot.geocoding import GeocodingError, OpenMeteoGeocodingClient
 from weather_alert_bot.geocoded_city_handler import run_until_geocoded_city
 from weather_alert_bot.geomagnetic_forecast import (
@@ -102,6 +108,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="получить диагностический прогноз планетарного индекса Kp NOAA SWPC",
     )
     telegram_group.add_argument(
+        "--preview-daily-summary",
+        action="store_true",
+        help="сформировать диагностическую ежедневную сводку без Telegram",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -136,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _fetch_weather_forecast()
     if args.fetch_kp_forecast:
         return _fetch_kp_forecast()
+    if args.preview_daily_summary:
+        return _preview_daily_summary()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -415,6 +428,43 @@ def _fetch_kp_forecast() -> int:
         )
         print(f"Статусы: {breakdown}")
     return 0
+
+
+def _preview_daily_summary() -> int:
+    try:
+        settings = load_settings(require_telegram_token=False)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        user_settings = storage.get_single_user_settings()
+        if user_settings is None:
+            print("Сохранённый город не найден.", file=sys.stderr)
+            return 1
+
+        weather = OpenMeteoWeatherClient().fetch(
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        geomagnetic = NoaaSwpcGeomagneticClient().fetch()
+        summary = build_daily_summary(
+            user_settings,
+            weather,
+            geomagnetic,
+            datetime.now(timezone.utc),
+        )
+        print(format_daily_summary(summary))
+        return 0
+    except (ConfigError, StorageError):
+        print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
+        return 1
+    except WeatherForecastError:
+        print("Ошибка получения прогноза погоды.", file=sys.stderr)
+        return 1
+    except GeomagneticForecastError:
+        print("Ошибка получения прогноза Kp NOAA SWPC.", file=sys.stderr)
+        return 1
+    except DailySummaryError:
+        print("Ошибка формирования ежедневной сводки.", file=sys.stderr)
+        return 1
 
 
 def _check_telegram() -> int:

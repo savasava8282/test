@@ -477,3 +477,73 @@
 - Kp forecast data layer теперь подтверждён реальным NOAA SWPC API. Telegram daily summary, `/today`, G1–G5 warning/business logic, пользовательский Kp threshold, NOAA watches/warnings/alerts, climate norms, weather warning logic, scheduler, scheduled sending и systemd ещё не реализованы.
 
 Weather forecast data layer и Kp forecast data layer подтверждены реальными API. Следующий архитектурный этап должен быть отдельно выбран техническим лидом; автоматически выбирать его нельзя. `technical_spec.md` не изменялся; `next_steps.md` отсутствует.
+
+## Актуальный stop-point после реализации base daily summary layer
+
+- Реализован отдельный deterministic/pure слой `src/weather_alert_bot/daily_summary.py`: `build_daily_summary(...)` объединяет уже разобранные `WeatherForecast`, `GeomagneticForecast`, сохранённые `UserSettings` и явно переданное aware-время; `format_daily_summary(...)` формирует стабильный русский текст.
+- Зафиксированы правила: локальная дата через сохранённый `ZoneInfo`; утро — точный hourly `09:00`, день — точный hourly `15:00`; неизвестный WMO code и отсутствие обязательных данных дают `DailySummaryError`.
+- Время осадков выбирается детерминированно по максимальной hourly probability с самым ранним часом при равенстве; при нулевых вероятностях используется первый hourly interval с `precipitation > 0`; при нулевой суточной сумме и вероятности сообщается, что осадки не ожидаются.
+- Для Kp используются только первые максимум 8 интервалов со статусом `predicted`, в сводке показывается их максимальный Kp без G-level/business logic. Source update time не выдумывается; выводится только `Сводка сформирована` в локальном времени.
+- Добавлен взаимоисключающий диагностический CLI `--preview-daily-summary`: read-only SQLite, существующие weather/Kp clients, готовый текст без Telegram и без записи настроек. Ошибки storage/fetch/build обрабатываются безопасно.
+- Полный автоматический набор после реализации: **292 теста успешно**; `python3 -m compileall -q src` успешно. Реальный `--preview-daily-summary` ЕЩЁ НЕ выполнялся.
+- Weather forecast и Kp forecast data layers уже подтверждены реальными Open-Meteo/NOAA API. Climate norms, warning/risk logic, G1–G5, пользовательский Kp threshold, Telegram daily summary, `/today`, scheduler, scheduled sending и systemd не реализованы.
+
+### Следующий stop-point
+
+Только контролируемый real `--preview-daily-summary` на существующих настройках с Open-Meteo и NOAA. Scheduler автоматически не начинать; следующий архитектурный этап отдельно выбирает технический лидер.
+
+## Актуальный stop-point после успешно завершённого real `--preview-daily-summary`
+
+Base daily summary layer реализован, автоматически протестирован и теперь подтверждён на реальных Open-Meteo + NOAA данных.
+
+- До контролируемого real-test были успешно пройдены **292 автоматических теста**.
+- Выполнен настоящий запуск `PYTHONPATH=src python3 -m weather_alert_bot --preview-daily-summary`; процесс завершился штатно.
+- Использованы реальные сохранённые настройки города `Москва` и сохранённый timezone `Europe/Moscow`.
+- Weather-часть реально получена через существующий Open-Meteo data layer, Kp-часть — через существующий NOAA SWPC data layer.
+- Local date/time formatter сработал для сохранённого timezone. Правила точного времени `09:00` для утра и `15:00` для дня успешно отработали на реальных данных.
+- Precipitation presentation logic реально сформировала: `до 53%, наиболее вероятно около 08:00`.
+- Kp presentation реально сформировала: `Kp до 2 в ближайшие 24 ч`.
+- Telegram-запрос во время preview не выполнялся; режим остался диагностическим и read-only.
+- SHA-256 реальной SQLite `~/.local/share/weather-alert-bot/settings.sqlite3` до и после запуска совпала byte-for-byte:
+
+  ```text
+  dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424
+  ```
+
+Полный фактический diagnostic preview:
+
+```text
+📍 Москва
+📅 12 августа 2026
+
+Погода: ливневый дождь
+Температура: +13.3…+17.9 °C
+Утром: +15.6 °C
+Днём: +17.3 °C
+
+Осадки: до 53%, наиболее вероятно около 08:00
+За сутки: 1.8 мм
+
+Ветер: до 15.1 км/ч
+Порывы: до 47.2 км/ч
+
+Магнитная активность: Kp до 2 в ближайшие 24 ч
+
+Сводка сформирована: 12.08.2026 06:16
+```
+
+Ограничения текущего этапа:
+
+- `/today` ещё не реализован.
+- Telegram `sendMessage` для этой сводки ещё не реализован.
+- Постоянный polling не реализован.
+- Climate norms не реализованы.
+- Risk/warning logic не реализована.
+- Температурные пользовательские пороги в сводку не интегрированы.
+- G1–G5 magnetic business logic не реализована.
+- NOAA watches/warnings/alerts не реализованы.
+- Scheduler не реализован.
+- Scheduled sending не реализован.
+- systemd не реализован.
+
+Weather forecast data layer, Kp forecast data layer и base daily summary preview подтверждены реальными данными/API. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.

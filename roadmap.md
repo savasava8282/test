@@ -519,3 +519,59 @@ Telegram daily summary, G-level/warning logic, climate norms, weather warning lo
 Тем самым подтверждены официальный endpoint, фактический `list[dict]` parser, `time_tag`, дробный Kp, статусы `observed`/`estimated`/`predicted`, 81 интервал и diagnostic CLI без Telegram/SQLite. История ошибки также закрыта: первый real-test дал `GeomagneticForecastError` из-за неверного tabular-предположения, endpoint отвечал `200 application/json`, parser/fixtures исправлены, после fix пройдены 273 автоматических теста.
 
 Ограничения: Telegram daily summary, `/today`, G1–G5 warning/business logic, пользовательский Kp threshold, NOAA watches/warnings/alerts, climate norms, weather warning logic, scheduler, scheduled sending и systemd ещё не реализованы. Weather forecast data layer и Kp forecast data layer подтверждены реальными API. Следующий архитектурный этап отдельно выбирает технический лид; автоматически не переходить к нему.
+
+## Текущий этап: базовая daily summary composition/formatter layer
+
+Реализован отдельный pure/deterministic слой, который объединяет существующие weather и Kp data layers без Telegram и scheduler.
+
+- `build_daily_summary(...)` получает сохранённые настройки, уже разобранные прогнозы и явное aware-время формирования.
+- Локальный день определяется через сохранённый timezone; «утром» используется точный `09:00`, «днём» — точный `15:00`.
+- WMO weather codes преобразуются в явные короткие русские описания; неизвестный код отклоняется.
+- Время осадков выбирается по максимальной вероятности с earliest tie-break и fallback на первый положительный hourly precipitation при нулевых вероятностях.
+- Kp берётся только из первых максимум 8 `predicted` intervals; показывается максимум без G-level и warning logic.
+- Добавлен diagnostic CLI `--preview-daily-summary`, read-only относительно SQLite и без Telegram send.
+- Полный unittest: 292 теста успешно; compileall успешно.
+- Реальный `--preview-daily-summary` ЕЩЁ НЕ выполнялся.
+
+Следующий stop-point — только контролируемый real preview на существующих настройках с Open-Meteo + NOAA. Telegram daily summary, `/today`, climate norms, weather/warning logic, G1–G5, пользовательский threshold, scheduler, scheduled sending и systemd не реализованы. Следующий архитектурный этап отдельно выбирает технический лидер.
+
+## Актуальный этап: base daily summary подтверждён real preview
+
+Base daily summary layer реализован и автоматически протестирован. До real-test были успешно пройдены 292 автоматических теста. Затем без расширения scope выполнен настоящий `PYTHONPATH=src python3 -m weather_alert_bot --preview-daily-summary` на реальных сохранённых настройках города `Москва`.
+
+- Weather-часть реально получена через существующий Open-Meteo data layer.
+- Kp-часть реально получена через существующий NOAA SWPC data layer.
+- Local date/time formatter сработал для сохранённого timezone `Europe/Moscow`.
+- Правила `09:00` для утра и `15:00` для дня успешно отработали на реальных данных.
+- Precipitation presentation сформировала `до 53%, наиболее вероятно около 08:00`.
+- Kp presentation сформировала `Kp до 2 в ближайшие 24 ч`.
+- Процесс завершился штатно; Telegram-запрос во время preview не выполнялся.
+- SHA-256 SQLite до и после byte-for-byte совпала: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`.
+
+Полный фактический diagnostic preview:
+
+```text
+📍 Москва
+📅 12 августа 2026
+
+Погода: ливневый дождь
+Температура: +13.3…+17.9 °C
+Утром: +15.6 °C
+Днём: +17.3 °C
+
+Осадки: до 53%, наиболее вероятно около 08:00
+За сутки: 1.8 мм
+
+Ветер: до 15.1 км/ч
+Порывы: до 47.2 км/ч
+
+Магнитная активность: Kp до 2 в ближайшие 24 ч
+
+Сводка сформирована: 12.08.2026 06:16
+```
+
+Base daily summary теперь считается подтверждённой на реальных Open-Meteo + NOAA данных.
+
+Ограничения: `/today`, Telegram `sendMessage` для этой сводки, постоянный polling, climate norms, risk/warning logic, температурные пользовательские пороги, G1–G5 magnetic business logic, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё не реализованы.
+
+Актуальный stop-point: `Weather forecast data layer, Kp forecast data layer и base daily summary preview подтверждены реальными данными/API. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.`
