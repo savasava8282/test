@@ -5,7 +5,7 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, `--check-telegram`, `--wait-for-start`, `--wait-for-city`, `--wait-for-geocoded-city`, `--wait-for-confirmed-city`, `--wait-for-daily-time`, `--wait-for-daily-days`, `--wait-for-daily-sending`, `--wait-for-urgent-warnings`, `--wait-for-warning-categories`, `--wait-for-settings-summary`, `--wait-for-onboarding-complete`, `--wait-for-today` и `--geocode-city` | updated | Все режимы взаимоисключающие; обычный запуск и прежние режимы сохранены |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, существующие режимы и `--preview-current-risks` | updated | Все режимы взаимоисключающие; новый preview не требует Telegram и сохраняет прежние режимы |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
 | `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
@@ -23,6 +23,7 @@
 | `src/weather_alert_bot/settings_summary_handler.py` | Однократная read-only итоговая сводка сохранённых onboarding-настроек | created | После новой приватной `/start` читает существующий `UserSettings`, отправляет стабильную сводку без записи в SQLite и безопасно завершается; автоматически проверен и подтверждён контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/onboarding_complete_handler.py` | Однократное финальное подтверждение и завершение первоначальной настройки | created | После новой приватной `/start` повторно показывает `format_settings_summary()`, принимает `Да`/`Нет`, при `Да` вызывает `mark_onboarding_completed()`, при `Нет` не меняет SQLite; автоматически проверен и подтверждён контролируемым реальным Telegram + SQLite-тестом обеих веток |
 | `src/weather_alert_bot/today_handler.py` | Однократная обработка новой приватной `/today` владельца | created | Читает единственного владельца через переданное read-only storage, очищает старые updates без ответа, проверяет chat ID и onboarding, после корректной команды вызывает существующие weather/Kp clients и daily summary builder/formatter, отправляет один результат и завершается; real Telegram/API-тест ещё не выполнялся |
+| `src/weather_alert_bot/risk_assessment.py` | Pure/deterministic current-day risk assessment для шести подключённых категорий | created | Immutable policy, signals и assessment; использует только переданные WeatherForecast/GeomagneticForecast, ZoneInfo и explicit aware formation time; heat/cold остаются unsupported |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -43,6 +44,8 @@
 | `tests/test_onboarding_storage.py` | Completion flag, add-only migration и storage API | created | Проверяет default `0`, миграцию только новой колонки, сохранение данных, идемпотентность, `0 -> 1`, отсутствие создания строки и сохранение флага при upsert города |
 | `tests/test_onboarding_complete_cli.py` | CLI-режим финального подтверждения | created | Проверяет token-safe wiring, storage error, help и взаимоисключение с каждым существующим one-shot режимом и `--geocode-city` |
 | `tests/test_today_handler.py` | One-shot `/today`, owner validation, data clients, formatter, ошибки и read-only поведение | created | Проверяет очистку старых updates, обе формы команды, private/group/чужие chats, onboarding, `daily_sending_enabled = 0`, safe errors, Telegram errors, fixed aware time, завершение и неизменность SQLite через fake/mock и временные базы |
+| `tests/test_risk_assessment.py` | Current-day detector thresholds, local date, timezone conversion, statuses, stable signals и formatter | created | Fake immutable forecasts; покрывает шесть категорий, Kp mapping G1–G5, unsupported heat/cold и custom policy |
+| `tests/test_risk_assessment_cli.py` | Diagnostic `--preview-current-risks` wiring и safe CLI behavior | created | Fake weather/Kp clients, read-only SQLite, отсутствие Telegram token, safe errors и mutual exclusion |
 | `tests/test_today_cli.py` | CLI-режим `--wait-for-today` | created | Проверяет обязательный token, read-only storage, existing clients, current aware datetime, help, safe storage error и mutual exclusion со всеми actions |
 
 ## Актуальный runtime-статус onboarding
@@ -390,3 +393,22 @@ Weather forecast data layer и Kp forecast data layer подтверждены �
 - Реальные negative scenarios другого chat ID/group/onboarding error этим запуском не проверялись; они подтверждены автоматическими тестами. Постоянный production polling loop не реализован.
 
 One-shot `/today` теперь подтверждён real Telegram + Open-Meteo + NOAA test. Следующий архитектурный этап выбирается отдельно техническим лидом.
+
+## Base current-day risk assessment: real-test завершён
+
+`src/weather_alert_bot/risk_assessment.py` — pure/deterministic слой оценки текущего локального дня; `--preview-current-risks` — read-only diagnostic CLI. Поддерживаются шесть категорий: magnetic storm, ice, heavy rain, thunderstorm, strong wind и storm. Heat/cold намеренно отложены до climate normals 1991–2020; detection не зависит от пользовательских notification category toggles.
+
+Controlled real preview 12.08.2026 использовал настоящие Open-Meteo и NOAA SWPC data layers и завершился выводом:
+
+```text
+Дата: 12.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+
+Не оцениваются на этом этапе: жара, холод
+```
+
+SHA-256 production SQLite до и после совпала: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; preview не изменил SQLite. Реальные positive hazard cases не проверялись; positive/threshold cases подтверждены автоматическими тестами. Полный набор до real-test: **355 тестов успешно**.
+
+`/today` не интегрирован с risk assessment. Event storage/lifecycle/dedup, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё отсутствуют. Следующий архитектурный этап отдельно выбирает технический лидер.

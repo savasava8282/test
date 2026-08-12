@@ -632,3 +632,39 @@ Real negative scenarios другого chat ID/group/onboarding error этим �
 Ограничения: текущий `/today` — one-shot validation mode; постоянный production bot loop, scheduler, scheduled daily sending, systemd, climate norms, warning/risk logic, temperature threshold business logic, G1–G5 magnetic business logic, NOAA watches/warnings/alerts, event storage/dedup/update lifecycle, Telegram buttons и полноценная command routing architecture ещё не реализованы.
 
 Актуальный stop-point: `Weather forecast data layer, Kp forecast data layer, base daily summary preview и one-shot Telegram /today подтверждены реальными API/Telegram. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.`
+
+## Историческая запись: base current-day risk assessment до controlled real-test
+
+Создан отдельный pure/deterministic core `src/weather_alert_bot/risk_assessment.py` и диагностический CLI `--preview-current-risks`.
+
+- Поддерживаются только шесть категорий: `magnetic_storm`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`.
+- Стартовые thresholds: Kp >= 7 (G3), daily precipitation >= 30 mm, hourly precipitation >= 15 mm/h, gust >= 72 km/h для strong wind и gust >= 90 km/h для storm.
+- Kp mapping зафиксирован явно: G1=5, G2=6, G3=7, G4=8, G5=9; дробные значения не округляются вверх. Используются только current-local-day intervals со статусами observed/estimated/predicted.
+- Ice использует WMO 56/57/66/67 и precipitation > 0 при temperature < 0; reason описывает риск условий для гололёда/обледенения, а не гарантированное состояние поверхности.
+- Thunderstorm использует только WMO 95/96/99. Storm пока основан только на численном gust threshold; official regional warnings не подключены.
+- Heat и cold не вычисляются; результат явно содержит `unsupported_categories = ("heat", "cold")`.
+- Detection не равна notification: пользовательские `warning_categories` не фильтруют detector и notification/event layer пока отсутствует.
+- CLI читает единственные настройки через read-only SQLite, делает один fake-testable weather request и один Kp request, не требует Telegram token и не меняет `/today`.
+- SQLite migrations, event storage, dedup, scheduler и scheduled sending не добавлялись.
+- Полный автоматический набор: **355 тестов успешно**; на момент записи real `--preview-current-risks` ещё НЕ выполнялся.
+
+Следующий stop-point того состояния: controlled real diagnostic `--preview-current-risks`.
+
+## Актуальный stop-point: base current-day risk assessment подтверждён real-test
+
+Controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` успешно выполнен 12.08.2026 с настоящими Open-Meteo и NOAA SWPC data layers, сохранёнными городом/timezone и без Telegram API. Фактический результат:
+
+```text
+Дата: 12.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+
+Не оцениваются на этом этапе: жара, холод
+```
+
+Слой поддерживает magnetic storm, ice, heavy rain, thunderstorm, strong wind и storm. Heat/cold намеренно не оцениваются до climate normals 1991–2020, поэтому real negative output не трактуется как отсутствие вообще всех рисков. Detection независим от notification category toggles. Реальные positive hazard cases не проверялись; positive/threshold cases подтверждены автоматическими тестами.
+
+SHA-256 production SQLite до и после real preview совпала byte-for-byte: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; diagnostic CLI подтверждён как read-only. До controlled real-test полный набор содержал **355 успешно пройденных тестов**, compileall и diff check были чистыми.
+
+`/today` пока не интегрирован с risk assessment. Event storage/lifecycle/dedup, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё не реализованы. Следующий архитектурный этап должен отдельно выбрать технический лидер.

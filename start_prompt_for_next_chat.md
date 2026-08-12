@@ -548,3 +548,36 @@ Production one-shot `/today` не изменил SQLite и остался read-o
 Актуальный stop-point: `Weather forecast data layer, Kp forecast data layer, base daily summary preview и one-shot Telegram /today подтверждены реальными API/Telegram. Следующий архитектурный этап должен быть отдельно выбран техническим лидом.`
 
 `technical_spec.md` не изменять. `next_steps.md` не создавать. Новый real Telegram/Open-Meteo/NOAA test в этой documentation/final verification pass не выполнять. Не выбирать следующий архитектурный этап самостоятельно.
+
+## Историческая запись: base current-day risk assessment до controlled real-test
+
+Создан pure/deterministic core `src/weather_alert_bot/risk_assessment.py` с immutable `RiskAssessmentPolicy`, `RiskSignal`, `CurrentDayRiskAssessment` и `RiskAssessmentError`. Добавлен диагностический взаимоисключающий CLI `--preview-current-risks`.
+
+Поддерживаются только категории `magnetic_storm`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`. Defaults: Kp >= 7; daily precipitation >= 30 mm; hourly precipitation >= 15 mm/h; gust >= 72 km/h (20 m/s) для strong wind; gust >= 90 km/h (25 m/s) для storm. Mapping: G1=5, G2=6, G3=7, G4=8, G5=9; дробный Kp не округляется вверх. Geomagnetic current-day logic использует только observed/estimated/predicted и игнорирует неизвестные статусы. Ice использует WMO 56/57/66/67 и precipitation > 0 при temperature < 0; thunderstorm — WMO 95/96/99. Storm пока численный gust-only, official regional warnings не подключены.
+
+Local date вычисляется через timezone города и explicit aware formation time; core не использует HTTP, Telegram, SQLite writes, environment variables или `datetime.now()`. Result структурирован, категории независимы, порядок signals стабилен, heat/cold не добавляются и указаны в `unsupported_categories`. User `warning_categories` detector не фильтруют; notification/event layer отсутствует. `/today` не изменён; scheduler, event storage, dedup, migrations и scheduled sending не создавались.
+
+Добавлены `tests/test_risk_assessment.py` и `tests/test_risk_assessment_cli.py`; полный набор содержит **355 успешных тестов**. CLI автоматически проверен с fake weather/Kp clients, read-only SQLite, без Telegram token, с safe errors и mutual exclusion. `python3 -m compileall -q src` на этапе разработки прошёл.
+
+На момент записи реальный `--preview-current-risks` ещё НЕ выполнялся. Следующий stop-point того состояния — controlled real diagnostic preview на существующих настройках. `technical_spec.md` не менять; `next_steps.md` не создавать; commit/push не выполнять.
+
+## Актуальная точка для следующего чата: base current-day risk assessment подтверждён real-test
+
+Base current-day risk assessment реализован и подтверждён controlled real запуском `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` от 12.08.2026. Запуск использовал настоящие Open-Meteo и NOAA SWPC data layers, сохранённые настройки города/timezone и не использовал Telegram API.
+
+Фактический вывод:
+
+```text
+Дата: 12.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+
+Не оцениваются на этом этапе: жара, холод
+```
+
+Поддерживаются шесть категорий: magnetic storm, ice, heavy rain, thunderstorm, strong wind и storm. Heat/cold намеренно не оцениваются до climate normals 1991–2020, поэтому вывод о невыявленных значимых рисках относится только к шести подключённым категориям и не означает отсутствия вообще всех рисков. Detection независим от notification category toggles. Реальные positive hazard cases не проверялись; positive/threshold cases подтверждены автоматическими тестами.
+
+Production SQLite до и после осталась byte-for-byte неизменной; SHA-256 в обеих проверках: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`. До real-test полный набор содержал **355 успешно пройденных тестов**.
+
+`/today` пока не интегрирован с risk assessment. Event storage/lifecycle/dedup, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё отсутствуют. Следующий архитектурный этап отдельно выбирает технический лидер. Не выполнять новые Open-Meteo, NOAA или Telegram requests автоматически; `technical_spec.md` не менять; `next_steps.md` не создавать; commit/push не выполнять.

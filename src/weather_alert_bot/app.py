@@ -21,6 +21,11 @@ from weather_alert_bot.geomagnetic_forecast import (
     NoaaSwpcGeomagneticClient,
 )
 from weather_alert_bot.onboarding_complete_handler import run_until_onboarding_complete
+from weather_alert_bot.risk_assessment import (
+    RiskAssessmentError,
+    assess_current_day_risks,
+    format_current_day_risk_assessment,
+)
 from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
@@ -114,6 +119,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="сформировать диагностическую ежедневную сводку без Telegram",
     )
     telegram_group.add_argument(
+        "--preview-current-risks",
+        action="store_true",
+        help="сформировать диагностическую оценку рисков текущего дня без Telegram",
+    )
+    telegram_group.add_argument(
         "--wait-for-today",
         action="store_true",
         help="дождаться одной новой команды /today владельца и отправить сводку",
@@ -155,6 +165,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _fetch_kp_forecast()
     if args.preview_daily_summary:
         return _preview_daily_summary()
+    if args.preview_current_risks:
+        return _preview_current_risks()
     if args.wait_for_today:
         return _wait_for_today()
     if args.geocode_city is not None:
@@ -472,6 +484,43 @@ def _preview_daily_summary() -> int:
         return 1
     except DailySummaryError:
         print("Ошибка формирования ежедневной сводки.", file=sys.stderr)
+        return 1
+
+
+def _preview_current_risks() -> int:
+    try:
+        settings = load_settings(require_telegram_token=False)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        user_settings = storage.get_single_user_settings()
+        if user_settings is None:
+            print("Сохранённый город не найден.", file=sys.stderr)
+            return 1
+
+        weather = OpenMeteoWeatherClient().fetch(
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        geomagnetic = NoaaSwpcGeomagneticClient().fetch()
+        assessment = assess_current_day_risks(
+            weather,
+            geomagnetic,
+            user_settings.timezone,
+            datetime.now(timezone.utc),
+        )
+        print(format_current_day_risk_assessment(assessment))
+        return 0
+    except (ConfigError, StorageError):
+        print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
+        return 1
+    except WeatherForecastError:
+        print("Ошибка получения прогноза погоды.", file=sys.stderr)
+        return 1
+    except GeomagneticForecastError:
+        print("Ошибка получения прогноза Kp NOAA SWPC.", file=sys.stderr)
+        return 1
+    except RiskAssessmentError:
+        print("Ошибка формирования оценки рисков текущего дня.", file=sys.stderr)
         return 1
 
 
