@@ -412,3 +412,15 @@ Controlled real preview 12.08.2026 использовал настоящие Ope
 SHA-256 production SQLite до и после совпала: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; preview не изменил SQLite. Реальные positive hazard cases не проверялись; positive/threshold cases подтверждены автоматическими тестами. Полный набор до real-test: **355 тестов успешно**.
 
 `/today` не интегрирован с risk assessment. Event storage/lifecycle/dedup, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё отсутствуют. Следующий архитектурный этап отдельно выбирает технический лидер.
+
+## Актуальная запись: base climate normals layer после controlled real-test
+
+- `src/weather_alert_bot/climate_normals.py` — отдельный immutable HTTP/parsing и pure calculation layer для Open-Meteo Historical Weather API, baseline `1991-01-01`—`2020-12-31`, fixed `ERA5-Land`, Celsius и daily min/max. Calculation требует полный date range, строит exact calendar-day arithmetic means, хранит sample counts и обрабатывает 29 февраля отдельно; smoothing отсутствует.
+- `src/weather_alert_bot/app.py` — добавлен взаимоисключающий read-only diagnostic `--preview-climate-normal`, использующий сохранённые coordinates/timezone, explicit aware UTC current time и ровно один historical request; forecast, NOAA, Telegram и storage writes не вызываются.
+- `tests/test_climate_normals.py` и `tests/test_climate_normals_cli.py` — fake HTTP/parsing validation, endpoint/query, safe errors, completeness, means, ordering, leap-day, lookup, deviation, formatter, read-only SQLite и CLI wiring.
+- Полный автоматический набор: **372 теста успешно**.
+- Controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-climate-normal` успешно выполнен для 12 августа на сохранённых latitude/longitude/timezone: Open-Meteo Historical Weather API, полный historical period `1991-01-01`—`2020-12-31`, fixed ERA5-Land, normal min `+13.8 °C`, normal max `+22.1 °C`, `sample_count=30`.
+- Перед и после real-test production SQLite имела один и тот же SHA-256: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; diagnostic подтверждён как read-only. Forecast, NOAA и Telegram API в этом запуске не использовались.
+- Persistence/cache climate data, climate SQLite/JSON, heat/cold detector и `±7 °C` threshold не добавлялись. `risk_assessment.py` по-прежнему считает heat/cold unsupported; `/today` не изменён. Leap-day cases подтверждены автоматическими тестами, но отдельный real-test 29 февраля не выполнялся. `technical_spec.md` не изменён; `next_steps.md` отсутствует.
+
+Следующий архитектурный этап отдельно выбирает технический лидер.

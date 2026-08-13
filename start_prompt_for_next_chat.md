@@ -581,3 +581,25 @@ Base current-day risk assessment реализован и подтверждён 
 Production SQLite до и после осталась byte-for-byte неизменной; SHA-256 в обеих проверках: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`. До real-test полный набор содержал **355 успешно пройденных тестов**.
 
 `/today` пока не интегрирован с risk assessment. Event storage/lifecycle/dedup, NOAA watches/warnings/alerts, scheduler, scheduled sending и systemd ещё отсутствуют. Следующий архитектурный этап отдельно выбирает технический лидер. Не выполнять новые Open-Meteo, NOAA или Telegram requests автоматически; `technical_spec.md` не менять; `next_steps.md` не создавать; commit/push не выполнять.
+
+## Актуальная точка для следующего чата: base climate normals layer реализован и real preview подтверждён
+
+Реализован отдельный `src/weather_alert_bot/climate_normals.py` и CLI:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --preview-climate-normal
+```
+
+Слой получает только Open-Meteo Historical Weather API за полный период 1991–2020 с `models=era5_land`, Celsius, saved timezone и daily min/max. HTTP/parser безопасно валидирует ответ. Pure calculation требует полного набора дат, вычисляет deterministic exact calendar-day arithmetic means, `sample_count` и обрабатывает 29 февраля отдельно; smoothing не реализован. Добавлены lookup, neutral temperature deviation и stable diagnostic formatter.
+
+Diagnostic CLI открывает существующую SQLite только read-only, получает единственные saved coordinates/timezone, создаёт explicit aware UTC current time в entry point, переводит его в local calendar date и делает ровно один Historical Weather API request. Forecast API, NOAA, Telegram, cache, JSON/SQLite persistence и migrations не используются. Telegram token не требуется. Ошибки безопасны, `KeyboardInterrupt` возвращает 130.
+
+`risk_assessment.py` не изменён; `unsupported_categories = ("heat", "cold")` сохранён. Heat/cold classification, `±7 °C`, threshold logic, risk integration и `/today` integration не реализованы. `/today`, daily summary formatter и Telegram output не изменены.
+
+Добавлены `tests/test_climate_normals.py` и `tests/test_climate_normals_cli.py`. Полный автоматический набор после реализации: **372 теста успешно**. Controlled real `--preview-climate-normal` успешно выполнен для 12 августа: normal min `+13.8 °C`, normal max `+22.1 °C`, `sample_count=30`. Использованы сохранённые latitude/longitude/timezone, полный historical period 1991–2020, Open-Meteo Historical Weather API и ERA5-Land; Forecast, NOAA и Telegram API не использовались.
+
+Перед и после controlled real-test production SQLite имела одинаковый SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424` byte-for-byte, поэтому preview подтверждён как read-only. Leap-day cases подтверждены автоматическими тестами; real-test 29 февраля отдельно не выполнялся.
+
+Следующий stop-point — отдельный выбор техническим лидером следующего архитектурного этапа.
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. После этого controlled preview не выполнять новые real Open-Meteo, NOAA или Telegram requests. Commit и push не выполнять без отдельного указания.

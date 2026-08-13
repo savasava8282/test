@@ -4,6 +4,13 @@ import sys
 from collections.abc import Sequence
 
 from weather_alert_bot.city_handler import run_until_city
+from weather_alert_bot.climate_normals import (
+    ClimateNormalsError,
+    OpenMeteoHistoricalWeatherClient,
+    calculate_climate_normals,
+    format_climate_normal,
+    local_calendar_date,
+)
 from weather_alert_bot.config import ConfigError, load_settings
 from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.daily_days_handler import run_until_daily_days
@@ -124,6 +131,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="сформировать диагностическую оценку рисков текущего дня без Telegram",
     )
     telegram_group.add_argument(
+        "--preview-climate-normal",
+        action="store_true",
+        help="показать климатическую норму текущего календарного дня без Telegram",
+    )
+    telegram_group.add_argument(
         "--wait-for-today",
         action="store_true",
         help="дождаться одной новой команды /today владельца и отправить сводку",
@@ -167,6 +179,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _preview_daily_summary()
     if args.preview_current_risks:
         return _preview_current_risks()
+    if args.preview_climate_normal:
+        return _preview_climate_normal()
     if args.wait_for_today:
         return _wait_for_today()
     if args.geocode_city is not None:
@@ -521,6 +535,40 @@ def _preview_current_risks() -> int:
         return 1
     except RiskAssessmentError:
         print("Ошибка формирования оценки рисков текущего дня.", file=sys.stderr)
+        return 1
+
+
+def _preview_climate_normal() -> int:
+    try:
+        settings = load_settings(require_telegram_token=False)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        user_settings = storage.get_single_user_settings()
+        if user_settings is None:
+            print("Сохранённый город не найден.", file=sys.stderr)
+            return 1
+
+        current_time = datetime.now(timezone.utc)
+        target_date = local_calendar_date(current_time, user_settings.timezone)
+        historical_days = OpenMeteoHistoricalWeatherClient().fetch(
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        normals = calculate_climate_normals(
+            historical_days,
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        print(format_climate_normal(normals, target_date))
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except (ConfigError, StorageError):
+        print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
+        return 1
+    except ClimateNormalsError:
+        print("Ошибка получения климатической нормы.", file=sys.stderr)
         return 1
 
 

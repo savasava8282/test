@@ -670,3 +670,21 @@ Base current-day risk assessment реализован как отдельный 
 Полный автоматический набор до real-test содержал **355 успешно пройденных тестов**; `python3 -m compileall -q src` и `git diff --check` были успешны. `/today` пока не интегрирован с risk assessment. Event storage/lifecycle/dedup, scheduler, scheduled sending, systemd и NOAA watches/warnings/alerts отсутствуют.
 
 Следующий архитектурный этап должен отдельно выбрать технический лидер. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Актуальный stop-point после controlled real-test base climate normals layer
+
+Реализован отдельный `src/weather_alert_bot/climate_normals.py` для базовой климатической нормы 1991–2020.
+
+- Источник — только Open-Meteo Historical Weather API (`archive-api.open-meteo.com/v1/archive`), с явно выбранной моделью ERA5-Land (`models=era5_land`), сохранённым timezone, Celsius и только daily `temperature_2m_min`/`temperature_2m_max`.
+- HTTP layer безопасно валидирует JSON, координаты, timezone, массивы, ISO dates, finite temperatures, `min <= max`, duplicate и даты вне baseline; raw response не выводится.
+- Pure calculation layer требует полный набор всех historical dates периода, группирует exact `(month, day)`, вычисляет отдельные arithmetic means и `sample_count`; 29 февраля считается только по реальным leap-day observations. Smoothing не реализован.
+- Добавлены immutable dataclasses, lookup по month/day, нейтральный temperature-deviation helper и стабильный diagnostic formatter. Threshold `±7 °C` и heat/cold classification не добавлялись.
+- Добавлен взаимоисключающий read-only CLI `--preview-climate-normal`: он читает единственные сохранённые координаты/timezone, передаёт явное aware UTC-время для local-date conversion и выполняет ровно один Historical Weather API request. Forecast, NOAA, Telegram и persistence/cache не используются.
+- `/today`, daily summary formatter, `risk_assessment.py` и `unsupported_categories = ("heat", "cold")` не изменены по смыслу.
+- Добавлены `tests/test_climate_normals.py` и `tests/test_climate_normals_cli.py`; полный автоматический набор: **372 теста успешно**.
+- Controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-climate-normal` успешно выполнен на сохранённых latitude/longitude/timezone. Использованы Open-Meteo Historical Weather API, полный период `1991-01-01`—`2020-12-31`, fixed model ERA5-Land и новый parsing/calculation layer; Forecast, NOAA и Telegram API не использовались.
+- Фактический результат для local calendar date 12 августа: normal min `+13.8 °C`, normal max `+22.1 °C`, `sample_count=30`.
+- Production SQLite до и после real-test имела одинаковый SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424` byte-for-byte; preview подтверждён как read-only.
+- Heat/cold detection не реализован; `risk_assessment.py` по-прежнему считает heat/cold unsupported. Persistence/cache climate data отсутствуют. Leap-day cases подтверждены автоматическими тестами, но controlled real-test 29 февраля отдельно не проверял.
+
+Следующий stop-point — отдельный выбор техническим лидером следующего архитектурного этапа. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
