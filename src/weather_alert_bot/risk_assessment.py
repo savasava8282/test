@@ -5,12 +5,15 @@ from datetime import date, datetime, timezone
 import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from weather_alert_bot.climate_normals import ClimateNormalDay
 from weather_alert_bot.geomagnetic_forecast import GeomagneticForecast
 from weather_alert_bot.weather_forecast import WeatherForecast
 
 
 RISK_CATEGORY_ORDER: tuple[str, ...] = (
     "magnetic_storm",
+    "heat",
+    "cold",
     "ice",
     "heavy_rain",
     "thunderstorm",
@@ -46,6 +49,8 @@ class RiskAssessmentPolicy:
     heavy_rain_hourly_mm: float = 15.0
     strong_wind_gust_kmh: float = 72.0
     storm_gust_kmh: float = 90.0
+    heat_deviation_c: float = 7.0
+    cold_deviation_c: float = 7.0
 
     def __post_init__(self) -> None:
         fields = (
@@ -62,6 +67,17 @@ class RiskAssessmentPolicy:
                 or not math.isfinite(float(value))
                 or float(value) < minimum
                 or (maximum is not None and float(value) > maximum)
+            ):
+                raise RiskAssessmentError(f"Некорректный порог policy: {name}.")
+        for name, value in (
+            ("heat_deviation_c", self.heat_deviation_c),
+            ("cold_deviation_c", self.cold_deviation_c),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or float(value) <= 0.0
             ):
                 raise RiskAssessmentError(f"Некорректный порог policy: {name}.")
 
@@ -81,7 +97,7 @@ class CurrentDayRiskAssessment:
 
     local_date: date
     signals: tuple[RiskSignal, ...]
-    unsupported_categories: tuple[str, ...] = UNSUPPORTED_CATEGORIES
+    unsupported_categories: tuple[str, ...] = ()
 
 
 def g_level_for_kp(kp: float) -> str | None:
@@ -98,6 +114,7 @@ def assess_current_day_risks(
     timezone_name: str,
     formation_time: datetime,
     policy: RiskAssessmentPolicy | None = None,
+    climate_normal: ClimateNormalDay | None = None,
 ) -> CurrentDayRiskAssessment:
     """Assess supported current-day risks using only supplied parsed data."""
     local_zone = _load_timezone(timezone_name)
@@ -111,6 +128,8 @@ def assess_current_day_risks(
     active_policy = policy if policy is not None else RiskAssessmentPolicy()
     if not isinstance(active_policy, RiskAssessmentPolicy):
         raise RiskAssessmentError("Policy оценки рисков имеет недопустимый тип.")
+    if climate_normal is not None:
+        _validate_climate_normal(climate_normal, local_date)
 
     local_hourly = tuple(
         item
@@ -119,6 +138,10 @@ def assess_current_day_risks(
         == local_date
     )
     daily = next((item for item in weather.daily if item.date == local_date), None)
+    if climate_normal is not None and daily is None:
+        raise RiskAssessmentError(
+            "Текущий день отсутствует в daily-прогнозе для оценки жары и холода."
+        )
 
     evidence: dict[str, RiskSignal] = {}
 
@@ -142,6 +165,33 @@ def assess_current_day_risks(
                     f"порог Kp {_number(active_policy.magnetic_kp_threshold)}."
                 ),
                 value=maximum_kp,
+            )
+
+    if climate_normal is not None and daily is not None:
+        heat_deviation = daily.temperature_2m_max - climate_normal.normal_temperature_max
+        if heat_deviation >= active_policy.heat_deviation_c:
+            evidence["heat"] = RiskSignal(
+                category="heat",
+                reason=(
+                    f"Прогнозируемый максимум {_temperature_one_decimal(daily.temperature_2m_max)} °C, "
+                    f"климатическая норма {_temperature_one_decimal(climate_normal.normal_temperature_max)} °C: "
+                    f"выше нормы на {_number_one_decimal(heat_deviation)} °C; "
+                    f"порог {_number_one_decimal(active_policy.heat_deviation_c)} °C."
+                ),
+                value=heat_deviation,
+            )
+
+        cold_deviation = daily.temperature_2m_min - climate_normal.normal_temperature_min
+        if cold_deviation <= -active_policy.cold_deviation_c:
+            evidence["cold"] = RiskSignal(
+                category="cold",
+                reason=(
+                    f"Прогнозируемый минимум {_temperature_one_decimal(daily.temperature_2m_min)} °C, "
+                    f"климатическая норма {_temperature_one_decimal(climate_normal.normal_temperature_min)} °C: "
+                    f"ниже нормы на {_number_one_decimal(-cold_deviation)} °C; "
+                    f"порог {_number_one_decimal(active_policy.cold_deviation_c)} °C."
+                ),
+                value=cold_deviation,
             )
 
     if daily is not None and daily.precipitation_sum >= active_policy.heavy_rain_daily_mm:
@@ -249,6 +299,7 @@ def assess_current_day_risks(
     return CurrentDayRiskAssessment(
         local_date=local_date,
         signals=tuple(evidence[category] for category in RISK_CATEGORY_ORDER if category in evidence),
+        unsupported_categories=() if climate_normal is not None else UNSUPPORTED_CATEGORIES,
     )
 
 
@@ -265,8 +316,51 @@ def format_current_day_risk_assessment(
         lines.extend(f"- {signal.category}: {signal.reason}" for signal in assessment.signals)
     else:
         lines.append("значимых не выявлено.")
-    lines.extend(("", "Не оцениваются на этом этапе: жара, холод"))
+    if assessment.unsupported_categories:
+        display_names = {
+            "heat": "жара",
+            "cold": "холод",
+        }
+        unsupported = ", ".join(
+            display_names.get(category, category)
+            for category in assessment.unsupported_categories
+        )
+        lines.extend(("", f"Не оцениваются на этом этапе: {unsupported}"))
     return "\n".join(lines)
+
+
+def _validate_climate_normal(
+    climate_normal: ClimateNormalDay,
+    local_date: date,
+) -> None:
+    if not isinstance(climate_normal, ClimateNormalDay):
+        raise RiskAssessmentError("Климатическая норма имеет недопустимый тип.")
+    if (
+        type(climate_normal.month) is not int
+        or type(climate_normal.day) is not int
+        or (climate_normal.month, climate_normal.day) != (local_date.month, local_date.day)
+    ):
+        raise RiskAssessmentError(
+            "Климатическая норма не соответствует текущей календарной дате."
+        )
+    for name, value in (
+        ("normal_temperature_min", climate_normal.normal_temperature_min),
+        ("normal_temperature_max", climate_normal.normal_temperature_max),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise RiskAssessmentError(f"Некорректное значение климатической нормы: {name}.")
+    if climate_normal.normal_temperature_min > climate_normal.normal_temperature_max:
+        raise RiskAssessmentError(
+            "Климатическая норма содержит minimum выше maximum."
+        )
+    if type(climate_normal.sample_count) is not int or climate_normal.sample_count <= 0:
+        raise RiskAssessmentError(
+            "Климатическая норма содержит некорректное число наблюдений."
+        )
 
 
 def _load_timezone(timezone_name: str) -> ZoneInfo:
@@ -302,3 +396,11 @@ def _number(value: float) -> str:
 
 def _temperature(value: float) -> str:
     return _number(value).replace("-", "−")
+
+
+def _number_one_decimal(value: float) -> str:
+    return f"{value:.1f}"
+
+
+def _temperature_one_decimal(value: float) -> str:
+    return f"{value:+.1f}".replace("-", "−")

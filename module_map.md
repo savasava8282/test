@@ -424,3 +424,24 @@ SHA-256 production SQLite до и после совпала: `dd249d550da41f27c6
 - Persistence/cache climate data, climate SQLite/JSON, heat/cold detector и `±7 °C` threshold не добавлялись. `risk_assessment.py` по-прежнему считает heat/cold unsupported; `/today` не изменён. Leap-day cases подтверждены автоматическими тестами, но отдельный real-test 29 февраля не выполнялся. `technical_spec.md` не изменён; `next_steps.md` отсутствует.
 
 Следующий архитектурный этап отдельно выбирает технический лидер.
+
+## Актуальная связка climate normals → current-day risks
+
+- `climate_normals.py` остаётся владельцем Historical Weather API, расчёта exact calendar-day normals 1991–2020 и lookup `ClimateNormalDay`; historical calculation не выполняется внутри detector.
+- `risk_assessment.py` принимает optional `ClimateNormalDay` в конце `assess_current_day_risks(...)`, валидирует тип, дату, finite min/max и положительный integer `sample_count`, затем независимо оценивает `heat` и `cold` по `RiskAssessmentPolicy.heat_deviation_c` / `cold_deviation_c` (default `7.0 °C`).
+- `app.py::_preview_current_risks()` — временная diagnostic orchestration: read-only SQLite → один explicit aware UTC `current_time` → weather → NOAA Kp → historical → calculation → local-date lookup → risk assessment. Telegram token/client и `/today` не используются.
+- `format_current_day_risk_assessment()` формирует unsupported note из result model; при полном наборе категорий note отсутствует.
+- Current-day detector теперь поддерживает все восемь категорий при наличии climate normal, но `/today`, daily summary, scheduler, cache/persistence и notification layer к нему не подключены.
+
+Следующий stop-point: controlled real `--preview-current-risks`; historical request на каждый diagnostic запуск пока допустим только как validation path. `technical_spec.md` не изменять; `next_steps.md` не создавать.
+
+## Актуальная запись: all-eight current-day risk assessment после controlled real-test
+
+- `src/weather_alert_bot/risk_assessment.py` — existing pure detector теперь поддерживает `magnetic_storm`, `heat`, `cold`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm` при наличии валидного `ClimateNormalDay`; automatic heat/cold deviation thresholds по умолчанию `7.0 °C`, inclusive.
+- Без climate normal сохраняется backward-compatible six-category mode с `unsupported_categories = ("heat", "cold")`; при climate normal `unsupported_categories = ()`.
+- `src/weather_alert_bot/app.py::_preview_current_risks()` — read-only diagnostic chain weather → NOAA → historical → calculation → current-local-date lookup → detector; historical request на ручной запуск пока является временным validation-path ограничением.
+- Controlled real `--preview-current-risks` от 13.08.2026 использовал все три внешних data layers и ERA5-Land; вывод: `значимых не выявлено`, без unsupported line. Это подтверждает all-eight mode, но не positive hazard case.
+- Production SQLite SHA-256 до/после: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; byte-for-byte unchanged.
+- Full suite: **386 tests OK**. Telegram, `/today`, scheduler, event lifecycle, notification delivery и NOAA watches/warnings/alerts к detector не подключены.
+
+Следующий архитектурный этап отдельно выбирается техническим лидером: сначала спроектировать climate cache/persistence для production path, затем отдельно рассматривать `/today` integration. `technical_spec.md` не менять; `next_steps.md` не создавать.

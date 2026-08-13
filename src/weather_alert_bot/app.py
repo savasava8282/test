@@ -9,6 +9,7 @@ from weather_alert_bot.climate_normals import (
     OpenMeteoHistoricalWeatherClient,
     calculate_climate_normals,
     format_climate_normal,
+    get_climate_normal_for_date,
     local_calendar_date,
 )
 from weather_alert_bot.config import ConfigError, load_settings
@@ -510,20 +511,37 @@ def _preview_current_risks() -> int:
             print("Сохранённый город не найден.", file=sys.stderr)
             return 1
 
+        current_time = datetime.now(timezone.utc)
         weather = OpenMeteoWeatherClient().fetch(
             user_settings.latitude,
             user_settings.longitude,
             user_settings.timezone,
         )
         geomagnetic = NoaaSwpcGeomagneticClient().fetch()
+        historical_days = OpenMeteoHistoricalWeatherClient().fetch(
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        normals = calculate_climate_normals(
+            historical_days,
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+        )
+        target_date = local_calendar_date(current_time, user_settings.timezone)
+        climate_normal = get_climate_normal_for_date(normals, target_date)
         assessment = assess_current_day_risks(
             weather,
             geomagnetic,
             user_settings.timezone,
-            datetime.now(timezone.utc),
+            current_time,
+            climate_normal=climate_normal,
         )
         print(format_current_day_risk_assessment(assessment))
         return 0
+    except KeyboardInterrupt:
+        return 130
     except (ConfigError, StorageError):
         print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
         return 1
@@ -532,6 +550,9 @@ def _preview_current_risks() -> int:
         return 1
     except GeomagneticForecastError:
         print("Ошибка получения прогноза Kp NOAA SWPC.", file=sys.stderr)
+        return 1
+    except ClimateNormalsError:
+        print("Ошибка получения климатической нормы.", file=sys.stderr)
         return 1
     except RiskAssessmentError:
         print("Ошибка формирования оценки рисков текущего дня.", file=sys.stderr)

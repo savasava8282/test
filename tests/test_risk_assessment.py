@@ -1,7 +1,9 @@
 from datetime import date, datetime, timezone
+import math
 import unittest
 from zoneinfo import ZoneInfo
 
+from weather_alert_bot.climate_normals import ClimateNormalDay
 from weather_alert_bot.geomagnetic_forecast import (
     GeomagneticForecast,
     GeomagneticForecastInterval,
@@ -46,6 +48,8 @@ def hourly(
 
 def weather(
     *,
+    temperature_max: float = 10.0,
+    temperature_min: float = 0.0,
     daily_precipitation: float = 0.0,
     daily_gust: float = 0.0,
     hours: tuple[HourlyForecast, ...] = (),
@@ -54,8 +58,8 @@ def weather(
     current = DailyForecast(
         date=LOCAL_DATE,
         weather_code=0,
-        temperature_2m_max=10.0,
-        temperature_2m_min=0.0,
+        temperature_2m_max=temperature_max,
+        temperature_2m_min=temperature_min,
         precipitation_probability_max=0.0,
         precipitation_sum=daily_precipitation,
         wind_speed_10m_max=0.0,
@@ -85,6 +89,23 @@ def kp(
         timestamp=timestamp,
         kp=value,
         status=status,
+    )
+
+
+def climate_normal(
+    *,
+    normal_min: float = 0.0,
+    normal_max: float = 10.0,
+    month: int = LOCAL_DATE.month,
+    day: int = LOCAL_DATE.day,
+    sample_count: int = 30,
+) -> ClimateNormalDay:
+    return ClimateNormalDay(
+        month=month,
+        day=day,
+        normal_temperature_min=normal_min,
+        normal_temperature_max=normal_max,
+        sample_count=sample_count,
     )
 
 
@@ -234,6 +255,113 @@ class RiskAssessmentTest(unittest.TestCase):
         self.assertEqual(result.signals, ())
         self.assertEqual(result.unsupported_categories, ("heat", "cold"))
 
+    def test_climate_normal_makes_heat_and_cold_supported(self) -> None:
+        result = self.assess(climate_normal=climate_normal())
+        self.assertEqual(result.unsupported_categories, ())
+
+    def test_heat_threshold_is_inclusive_and_uses_normal_max(self) -> None:
+        for forecast_max, expected in ((17.0, True), (16.9, False), (17.1, True)):
+            with self.subTest(forecast_max=forecast_max):
+                result = self.assess(
+                    current_weather=weather(temperature_max=forecast_max),
+                    climate_normal=climate_normal(normal_max=10.0),
+                )
+                self.assertEqual("heat" in self.categories(result), expected)
+
+    def test_cold_threshold_is_inclusive_and_uses_normal_min(self) -> None:
+        for forecast_min, expected in ((-7.0, True), (-6.9, False), (-7.1, True)):
+            with self.subTest(forecast_min=forecast_min):
+                result = self.assess(
+                    current_weather=weather(temperature_min=forecast_min),
+                    climate_normal=climate_normal(normal_min=0.0),
+                )
+                self.assertEqual("cold" in self.categories(result), expected)
+
+    def test_temperature_min_and_max_are_not_swapped(self) -> None:
+        result = self.assess(
+            current_weather=weather(temperature_max=27.0, temperature_min=-7.0),
+            climate_normal=climate_normal(normal_min=0.0, normal_max=20.0),
+        )
+        self.assertEqual(self.categories(result), ("heat", "cold"))
+
+    def test_heat_and_cold_reasons_contain_forecast_normal_deviation_and_threshold(self) -> None:
+        result = self.assess(
+            current_weather=weather(temperature_max=30.0, temperature_min=-15.0),
+            climate_normal=climate_normal(normal_min=-6.0, normal_max=22.0),
+        )
+        heat_reason = result.signals[0].reason
+        cold_reason = result.signals[1].reason
+        for text in ("+30.0", "+22.0", "8.0", "7.0"):
+            self.assertIn(text, heat_reason)
+        for text in ("−15.0", "−6.0", "9.0", "7.0"):
+            self.assertIn(text, cold_reason)
+
+    def test_custom_heat_and_cold_policy_thresholds_are_used(self) -> None:
+        policy = RiskAssessmentPolicy(heat_deviation_c=5.0, cold_deviation_c=4.0)
+        result = self.assess(
+            current_weather=weather(temperature_max=15.0, temperature_min=-4.0),
+            climate_normal=climate_normal(),
+            policy=policy,
+        )
+        self.assertEqual(self.categories(result), ("heat", "cold"))
+
+    def test_heat_and_cold_policy_thresholds_must_be_finite_positive_non_bool_numbers(self) -> None:
+        for field in ("heat_deviation_c", "cold_deviation_c"):
+            for value in (0, -1, math.nan, math.inf, -math.inf, True):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaises(RiskAssessmentError):
+                        RiskAssessmentPolicy(**{field: value})
+
+    def test_invalid_climate_normal_type_date_values_and_sample_count_are_rejected(self) -> None:
+        invalid_normals = (
+            object(),
+            climate_normal(month=8, day=11),
+            climate_normal(normal_min=math.nan),
+            climate_normal(normal_max=math.inf),
+            climate_normal(normal_min=10.0, normal_max=9.0),
+            climate_normal(sample_count=0),
+            climate_normal(sample_count=-1),
+            climate_normal(sample_count=True),
+        )
+        for invalid in invalid_normals:
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(RiskAssessmentError):
+                    self.assess(climate_normal=invalid)
+
+    def test_climate_normal_requires_current_daily_forecast(self) -> None:
+        weather_without_current_day = WeatherForecast(
+            latitude=55.0,
+            longitude=37.0,
+            timezone="Europe/Moscow",
+            generation_time_ms=None,
+            daily=(),
+            hourly=(),
+        )
+        with self.assertRaises(RiskAssessmentError):
+            self.assess(
+                current_weather=weather_without_current_day,
+                climate_normal=climate_normal(),
+            )
+
+    def test_heat_and_cold_are_independent_and_full_order_is_deterministic(self) -> None:
+        result = self.assess(
+            current_weather=weather(
+                temperature_max=18.0,
+                temperature_min=-8.0,
+                daily_precipitation=30.0,
+                hours=(hourly(precipitation=15.0, temperature=-1.0, weather_code=95, gust=90.0),),
+            ),
+            forecast=geomagnetic(kp(7.0)),
+            climate_normal=climate_normal(normal_min=0.0, normal_max=10.0),
+        )
+        self.assertEqual(
+            self.categories(result),
+            (
+                "magnetic_storm", "heat", "cold", "ice", "heavy_rain",
+                "thunderstorm", "strong_wind", "storm",
+            ),
+        )
+
     def test_custom_policy_thresholds_are_used(self) -> None:
         policy = RiskAssessmentPolicy(
             magnetic_kp_threshold=6.5,
@@ -260,6 +388,11 @@ class RiskAssessmentTest(unittest.TestCase):
         self.assertLess(text.index("- strong_wind"), text.index("- storm"))
         self.assertIn("Не оцениваются на этом этапе: жара, холод", text)
         self.assertNotIn("Сегодня рисков нет", text)
+
+    def test_formatter_omits_unsupported_note_when_all_categories_are_supported(self) -> None:
+        result = self.assess(climate_normal=climate_normal())
+        text = format_current_day_risk_assessment(result)
+        self.assertNotIn("Не оцениваются на этом этапе", text)
 
 
 if __name__ == "__main__":

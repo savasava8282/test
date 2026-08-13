@@ -1,13 +1,20 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from weather_alert_bot.app import main
+from weather_alert_bot.climate_normals import (
+    BASELINE_END,
+    BASELINE_START,
+    ClimateNormalDay,
+    ClimateNormalsError,
+    HistoricalTemperatureDay,
+)
 from weather_alert_bot.geocoding import GeocodingLocation
 from weather_alert_bot.geomagnetic_forecast import (
     GeomagneticForecast,
@@ -22,6 +29,27 @@ from weather_alert_bot.weather_forecast import (
     WeatherForecast,
     WeatherForecastError,
 )
+
+
+def historical_records() -> tuple[HistoricalTemperatureDay, ...]:
+    return tuple(
+        HistoricalTemperatureDay(
+            BASELINE_START + timedelta(days=offset),
+            8.0,
+            18.0,
+        )
+        for offset in range((BASELINE_END - BASELINE_START).days + 1)
+    )
+
+
+def climate_normal() -> ClimateNormalDay:
+    return ClimateNormalDay(
+        month=8,
+        day=12,
+        normal_temperature_min=8.0,
+        normal_temperature_max=18.0,
+        sample_count=30,
+    )
 
 
 def city() -> GeocodingLocation:
@@ -67,8 +95,14 @@ class RiskAssessmentCliTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary_directory.name) / "settings.sqlite3"
+        self.historical_client_patch = patch(
+            "weather_alert_bot.app.OpenMeteoHistoricalWeatherClient"
+        )
+        self.historical_type = self.historical_client_patch.start()
+        self.historical_type.return_value.fetch.return_value = historical_records()
 
     def tearDown(self) -> None:
+        self.historical_client_patch.stop()
         self.temporary_directory.cleanup()
 
     def run_cli(self) -> tuple[int, str, str]:
@@ -105,7 +139,11 @@ class RiskAssessmentCliTest(unittest.TestCase):
         kp_type.return_value.fetch.assert_called_once_with()
         self.assertIn("Дата: 12.08.2026", stdout)
         self.assertIn("magnetic_storm", stdout)
-        self.assertIn("Не оцениваются на этом этапе: жара, холод", stdout)
+        self.assertNotIn("Не оцениваются на этом этапе", stdout)
+        self.historical_type.assert_called_once_with()
+        self.historical_type.return_value.fetch.assert_called_once_with(
+            55.75204, 37.61781, "Europe/Moscow"
+        )
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_no_telegram_token_is_required_and_telegram_is_not_called(self) -> None:
@@ -115,7 +153,9 @@ class RiskAssessmentCliTest(unittest.TestCase):
             with patch("weather_alert_bot.app.NoaaSwpcGeomagneticClient") as kp_type:
                 kp_type.return_value.fetch.return_value = geomagnetic()
                 with patch("weather_alert_bot.app.TelegramClient") as telegram_type:
-                    result, _, stderr = self.run_cli()
+                    with patch("weather_alert_bot.app.datetime") as datetime_type:
+                        datetime_type.now.return_value = datetime(2026, 8, 11, 21, tzinfo=timezone.utc)
+                        result, _, stderr = self.run_cli()
         self.assertEqual(result, 0)
         self.assertEqual(stderr, "")
         telegram_type.assert_not_called()
@@ -175,6 +215,72 @@ class RiskAssessmentCliTest(unittest.TestCase):
         self.assertEqual(stdout, "")
         self.assertIn("Ошибка формирования оценки рисков текущего дня.", stderr)
         self.assertNotIn("private risk details", stderr)
+
+    def test_historical_failure_is_safe(self) -> None:
+        self.save_city()
+        self.historical_type.return_value.fetch.side_effect = ClimateNormalsError(
+            "private historical details"
+        )
+        with patch("weather_alert_bot.app.OpenMeteoWeatherClient") as weather_type:
+            weather_type.return_value.fetch.return_value = weather()
+            with patch("weather_alert_bot.app.NoaaSwpcGeomagneticClient") as kp_type:
+                kp_type.return_value.fetch.return_value = geomagnetic()
+                result, stdout, stderr = self.run_cli()
+        self.assertEqual(result, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("Ошибка получения климатической нормы.", stderr)
+        self.assertNotIn("private historical details", stderr)
+
+    def test_calculation_lookup_and_same_aware_time_are_used_for_risk_assessment(self) -> None:
+        self.save_city()
+        current_time = datetime(2026, 8, 11, 21, tzinfo=timezone.utc)
+        normal = climate_normal()
+        calculated_normals = object()
+        assessment = CurrentDayRiskAssessment(
+            local_date=date(2026, 8, 12),
+            signals=(),
+            unsupported_categories=(),
+        )
+        with patch("weather_alert_bot.app.calculate_climate_normals", return_value=calculated_normals) as calculate:
+            with patch("weather_alert_bot.app.get_climate_normal_for_date", return_value=normal) as lookup:
+                with patch("weather_alert_bot.app.assess_current_day_risks", return_value=assessment) as assess:
+                    with patch("weather_alert_bot.app.OpenMeteoWeatherClient") as weather_type:
+                        weather_type.return_value.fetch.return_value = weather()
+                        with patch("weather_alert_bot.app.NoaaSwpcGeomagneticClient") as kp_type:
+                            kp_type.return_value.fetch.return_value = geomagnetic()
+                            with patch("weather_alert_bot.app.datetime") as datetime_type:
+                                datetime_type.now.return_value = current_time
+                                result, stdout, stderr = self.run_cli()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Дата: 12.08.2026", stdout)
+        datetime_type.now.assert_called_once_with(timezone.utc)
+        calculate.assert_called_once()
+        lookup.assert_called_once_with(calculated_normals, date(2026, 8, 12))
+        assess.assert_called_once_with(
+            ANY,
+            ANY,
+            "Europe/Moscow",
+            current_time,
+            climate_normal=normal,
+        )
+
+    def test_current_risks_does_not_create_telegram_or_call_today(self) -> None:
+        self.save_city()
+        with patch("weather_alert_bot.app.OpenMeteoWeatherClient") as weather_type:
+            weather_type.return_value.fetch.return_value = weather()
+            with patch("weather_alert_bot.app.NoaaSwpcGeomagneticClient") as kp_type:
+                kp_type.return_value.fetch.return_value = geomagnetic()
+                with patch("weather_alert_bot.app.TelegramClient") as telegram_type:
+                    with patch("weather_alert_bot.app.run_until_today") as today:
+                        with patch("weather_alert_bot.app.datetime") as datetime_type:
+                            datetime_type.now.return_value = datetime(2026, 8, 11, 21, tzinfo=timezone.utc)
+                            result, _, stderr = self.run_cli()
+        self.assertEqual(result, 0)
+        self.assertEqual(stderr, "")
+        telegram_type.assert_not_called()
+        today.assert_not_called()
 
     def test_mode_is_mutually_exclusive_with_all_existing_actions(self) -> None:
         actions = (

@@ -684,3 +684,42 @@ SHA-256 production SQLite до и после real preview совпала byte-fo
 - Controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-climate-normal` успешно выполнен на сохранённых latitude/longitude/timezone для local date 12 августа. Использованы Open-Meteo Historical Weather API, полный период `1991-01-01`—`2020-12-31`, fixed ERA5-Land и daily min/max; Forecast, NOAA и Telegram API не использовались. Результат: normal min `+13.8 °C`, normal max `+22.1 °C`, `sample_count=30`.
 - Production SQLite до и после controlled real-test имела одинаковый SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424` byte-for-byte; diagnostic подтверждён как read-only.
 - Heat/cold detector не реализован; `risk_assessment.py` по-прежнему считает heat/cold unsupported. Persistence/cache climate data отсутствуют, `/today` не изменён. 29 February отдельно real-test не проверялся; leap-day cases подтверждены автоматическими тестами. Следующий архитектурный этап отдельно выбирает технический лидер. `technical_spec.md` не изменён; `next_steps.md` не создавать; commit/push не выполнять.
+
+## Текущий этап: автоматическая оценка жары и холода относительно climate normals
+
+Завершено до controlled real-test:
+
+- расширен существующий current-day detector с шести до всех восьми технических категорий;
+- добавлены независимые immutable policy thresholds `heat_deviation_c = 7.0` и `cold_deviation_c = 7.0`;
+- подключён передаваемый `ClimateNormalDay` без historical lookup/calculation внутри pure detector;
+- сохранён backward-compatible режим без climate normal: heat/cold остаются unsupported;
+- `--preview-current-risks` подключён к существующему climate layer через один historical request на ручной запуск;
+- добавлены validation errors, stable formatter behavior и fake/mock CLI/unit tests; полный набор — 386 тестов OK.
+
+Ограничения текущего этапа:
+
+- пользовательские absolute, season-specific и month-specific thresholds ещё не реализованы;
+- climate cache/persistence/SQLite tables/JSON storage не добавлялись;
+- `/today`, daily summary, scheduler, scheduled sending и notification lifecycle не изменялись;
+- real all-eight-category preview и positive real heat/cold case ещё не выполнялись.
+
+Следующий stop-point: controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks`; проверить три источника, local-date lookup, все восемь supported categories в output и byte-for-byte неизменность production SQLite. После этого отдельно спроектировать cache/persistence перед любой production integration.
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. Commit и push не выполнять.
+
+## Этап закрыт: all-eight current-day risk assessment подтверждён real-test
+
+Controlled real запуск `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` успешно выполнен 13.08.2026.
+
+- Использованы saved latitude/longitude/timezone, Open-Meteo Forecast API, NOAA SWPC Kp, Open-Meteo Historical Weather API, ERA5-Land и climate normals 1991–2020.
+- Фактический результат: `Дата: 13.08.2026`, `значимых не выявлено.`
+- Unsupported line про жару и холод отсутствовала; detector работал в all-eight mode.
+- Реальные positive heat/cold и другие positive hazard cases не возникли и этим запуском не подтверждены; threshold/positive cases подтверждены automated tests.
+- Production SQLite до/после byte-for-byte неизменна: SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`.
+- Full suite: **386 tests OK**; `compileall` и `git diff --check` успешны.
+
+Состояние после закрытия этапа: automatic heat/cold logic и default `±7.0 °C` реализованы; при climate normal доступны все 8 категорий; без неё сохраняется six-category compatibility mode. User season/month/custom thresholds, climate cache/persistence и `/today` integration отсутствуют. Diagnostic current-risks пока повторно запрашивает historical 1991–2020 при ручном запуске, что является временным validation path, а не финальной production architecture.
+
+Scheduler, event storage, dedup/lifecycle, notifications и NOAA watches/warnings/alerts ещё отсутствуют. Следующий архитектурный этап отдельно выбирает технический лидер.
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. Commit и push не выполнять.

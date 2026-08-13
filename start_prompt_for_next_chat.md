@@ -603,3 +603,61 @@ Diagnostic CLI открывает существующую SQLite только r
 Следующий stop-point — отдельный выбор техническим лидером следующего архитектурного этапа.
 
 `technical_spec.md` не изменять. `next_steps.md` не создавать. После этого controlled preview не выполнять новые real Open-Meteo, NOAA или Telegram requests. Commit и push не выполнять без отдельного указания.
+
+## Актуальная точка для следующего чата: heat/cold подключены, real all-eight preview ещё впереди
+
+Последний подтверждённый baseline перед этой задачей был `82d3d1c8f7ef58f26414370ea24bdce1e4fa4f37`. В рамках текущего business-logic/integration этапа расширен существующий `risk_assessment.py`.
+
+Готово:
+
+- current-day detector оценивает `magnetic_storm`, `heat`, `cold`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm` в этом порядке, когда передан валидный `ClimateNormalDay`;
+- heat/cold используют exact calendar-day normal min/max и forecast daily min/max; default deviations — `7.0 °C`, thresholds inclusive;
+- `RiskAssessmentPolicy` immutable и централизованно содержит `heat_deviation_c` и `cold_deviation_c`;
+- без climate normal старые шесть категорий работают прежним способом, а `unsupported_categories` содержит `heat`, `cold`;
+- formatter больше не печатает unsupported line при `unsupported_categories == ()`;
+- `--preview-current-risks` делает read-only orchestration weather + NOAA + historical climate, используя один explicit aware UTC `current_time`, и безопасно обрабатывает `ClimateNormalsError`;
+- автоматический набор после изменений: **386 тестов OK**; HTTP tests fake/mock.
+
+Не сделано и не начинать автоматически:
+
+- controlled real `--preview-current-risks` ещё не выполнен;
+- real positive heat/cold case не утверждать заранее;
+- не добавлять cache/persistence, SQLite migration, user threshold settings, `/today`, daily summary, scheduler или notification integration;
+- `technical_spec.md` не менять и `next_steps.md` не создавать.
+
+Текущий stop-point: выполнить отдельно controlled real:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks
+```
+
+Проверить saved coordinates/timezone, один weather request, один NOAA request, один Historical Weather API request, local-date lookup, передачу `ClimateNormalDay` в detector и byte-for-byte неизменность production SQLite. Не выполнять real network автоматически в рамках следующего чтения контекста.
+
+## Актуальная точка для следующего чата: all-eight current-day risk assessment real-tested
+
+Документационное закрытие этапа выполнено. Controlled real команда:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks
+```
+
+успешно выполнена 13.08.2026.
+
+Real run использовал сохранённые latitude/longitude/timezone, Open-Meteo current Forecast API, NOAA SWPC Kp, Open-Meteo Historical Weather API, ERA5-Land, climate normals 1991–2020 и detector со всеми восемью категориями. Telegram API не использовался.
+
+Фактический вывод:
+
+```text
+Дата: 13.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+```
+
+Строка `Не оцениваются на этом этапе: жара, холод` отсутствовала — real diagnostic работал с climate normal в all-eight mode. Это не является positive hazard validation: heat, cold и другие positive signals фактически не возникли. Positive/threshold cases подтверждены автоматическими тестами.
+
+Production SQLite до и после имеет SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte unchanged; diagnostic read-only подтверждён.
+
+Итоги: automatic heat/cold logic реализована, default deviation `7.0 °C`, thresholds inclusive; без climate normal сохраняется six-category mode; user season/month/custom thresholds и climate cache/persistence отсутствуют; diagnostic historical request пока выполняется при каждом ручном запуске и не является финальной production architecture; `/today` ещё не интегрирован.
+
+Full suite — **386 tests OK**. Scheduler, event storage, dedup/lifecycle, notifications и NOAA watches/warnings/alerts ещё не реализованы. Следующий архитектурный этап отдельно выбирает технический лидер. Не менять `technical_spec.md`, не создавать `next_steps.md`, не делать commit/push.

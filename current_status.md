@@ -688,3 +688,44 @@ Base current-day risk assessment реализован как отдельный 
 - Heat/cold detection не реализован; `risk_assessment.py` по-прежнему считает heat/cold unsupported. Persistence/cache climate data отсутствуют. Leap-day cases подтверждены автоматическими тестами, но controlled real-test 29 февраля отдельно не проверял.
 
 Следующий stop-point — отдельный выбор техническим лидером следующего архитектурного этапа. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Актуальный этап: heat/cold подключены к current-day risk assessment
+
+В `src/weather_alert_bot/risk_assessment.py` расширен существующий pure detector: при переданном валидном `ClimateNormalDay` он оценивает все восемь категорий в deterministic order `magnetic_storm`, `heat`, `cold`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`. Heat использует прогнозируемый daily maximum и normal maximum; cold — daily minimum и normal minimum. Оба automatic deviation threshold включены в immutable `RiskAssessmentPolicy` и по умолчанию равны `7.0 °C`; границы inclusive.
+
+Без climate normal сохранён backward-compatible six-category mode с `unsupported_categories = ("heat", "cold")`. При корректной climate normal `unsupported_categories = ()`; отсутствие текущего daily forecast, неверная дата/температуры/sample count или неверный тип нормы дают safe `RiskAssessmentError`. Heat и cold независимы, пользовательские season/month/absolute thresholds не добавлялись.
+
+`--preview-current-risks` теперь остаётся read-only diagnostic path и использует один explicit aware UTC `current_time`, один fake-testable request weather, один NOAA request и один Historical Weather API request, затем рассчитывает и получает normal текущей local date и передаёт её в detector. При ошибке climate stage выводится стабильное сообщение без raw details. Исторический запрос при каждом ручном diagnostic запуске является временным ограничением validation path; production cache/persistence пока отсутствуют.
+
+Расширены risk и CLI tests; полный автоматический набор — **386 тестов успешно**. Все HTTP tests используют fake/mock clients. `/today`, Telegram handler, daily summary, scheduler, SQLite schema и production loop не изменялись. Controlled real all-eight-category `--preview-current-risks` ещё НЕ выполнялся; real positive heat/cold case не утверждается. Следующий stop-point — controlled real `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` с проверкой read-only SQLite.
+
+`technical_spec.md` не изменять. `next_steps.md` не создавать. Commit и push не выполнять.
+
+## Актуальный stop-point: all-eight current-day risk assessment подтверждён controlled real-test
+
+Документационное закрытие этапа выполнено после успешного controlled real запуска:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks
+```
+
+Запуск от 13.08.2026 использовал сохранённые latitude/longitude/timezone, current Forecast API Open-Meteo, NOAA SWPC Kp forecast, Historical Weather API Open-Meteo, ERA5-Land, exact calendar-day climate normals 1991–2020 и существующий detector со всеми восемью категориями. Telegram API не использовался.
+
+Фактический вывод:
+
+```text
+Дата: 13.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+```
+
+Строка `Не оцениваются на этом этапе: жара, холод` отсутствовала. Это подтверждает, что real diagnostic работал с подключённой climate normal в all-eight mode, а не в backward-compatible six-category mode. На фактических данных значимых сигналов по восьми категориям не возникло; real positive heat, cold или иных hazard signals этим запуском не подтверждались. Positive/threshold cases подтверждены automated tests.
+
+Production SQLite до и после запуска имела одинаковый SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424` byte-for-byte. Diagnostic подтверждён как read-only.
+
+Automatic heat/cold business logic реализована: default deviation threshold — `7.0 °C`, thresholds inclusive; при наличии climate normal поддерживаются все 8 current-day categories; без climate normal сохранён backward-compatible six-category mode. User season/month/custom thresholds, climate cache/persistence и `/today` integration отсутствуют. Diagnostic current-risks временно скачивает historical 1991–2020 при каждом ручном запуске; это validation path, не финальная production architecture.
+
+Full suite: **386 tests OK**. Scheduler, event storage, dedup/lifecycle, notifications и NOAA watches/warnings/alerts ещё не подключены. Следующий архитектурный этап отдельно выбирается техническим лидером.
+
+`technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
