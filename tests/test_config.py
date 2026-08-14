@@ -3,7 +3,14 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from weather_alert_bot.config import DEFAULT_DB_PATH, ConfigError, Settings, load_settings
+from weather_alert_bot.config import (
+    DEFAULT_CLIMATE_DB_PATH,
+    DEFAULT_DB_PATH,
+    DEFAULT_RUNTIME_DB_PATH,
+    ConfigError,
+    Settings,
+    load_settings,
+)
 
 
 TEST_TOKEN = "123456789:TEST_TOKEN_NOT_REAL"
@@ -16,6 +23,8 @@ class LoadSettingsTest(unittest.TestCase):
 
         self.assertIsNone(settings.telegram_bot_token)
         self.assertEqual(settings.db_path, DEFAULT_DB_PATH)
+        self.assertEqual(settings.climate_db_path, DEFAULT_CLIMATE_DB_PATH)
+        self.assertEqual(settings.runtime_db_path, DEFAULT_RUNTIME_DB_PATH)
 
     def test_database_path_uses_environment_variable(self) -> None:
         with patch.dict(
@@ -47,6 +56,22 @@ class LoadSettingsTest(unittest.TestCase):
             settings = load_settings()
 
         self.assertEqual(settings.telegram_bot_token, TEST_TOKEN)
+
+    def test_climate_and_runtime_paths_use_distinct_environment_variables(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "WEATHER_ALERT_BOT_DB_PATH": "~/settings.sqlite3",
+                "WEATHER_ALERT_BOT_CLIMATE_DB_PATH": "~/climate.sqlite3",
+                "WEATHER_ALERT_BOT_RUNTIME_DB_PATH": "~/runtime.sqlite3",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+
+        self.assertEqual(settings.db_path, Path.home() / "settings.sqlite3")
+        self.assertEqual(settings.climate_db_path, Path.home() / "climate.sqlite3")
+        self.assertEqual(settings.runtime_db_path, Path.home() / "runtime.sqlite3")
 
     def test_missing_required_token_raises_exact_error(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

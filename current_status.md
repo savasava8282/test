@@ -852,3 +852,94 @@ HISTORICAL_DNS_ATTEMPTS=0
 После implementation: **418 tests OK**. `compileall` и `git diff --check` успешно завершены; real network/Telegram requests в implementation task не выполнялись, описанный real test был отдельной ручной controlled validation.
 
 Текущий stop-point закрыт. Следующий архитектурный этап отдельно выбирает технический лидер; его самостоятельно не выбирать и не реализовывать. Ещё не реализованы scheduled daily sender, scheduler, event persistence/lifecycle, five-day warning detection, dedup, preliminary/update/start/end workflow, urgent delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds, user magnetic threshold, permanent polling и systemd. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Текущая точка: scheduled daily dispatch core реализован
+
+Baseline перед implementation: `4891eb94ed19c9b596fa0aadf55ba372a1b8cb00`. Реализован отдельный production stage для однократного scheduled dispatch tick; permanent scheduler, loop, sleep, cron и systemd не добавлялись.
+
+Создан `src/weather_alert_bot/daily_report.py` — единый production service для manual `/today` и scheduled dispatch. Он владеет одним Weather fetch, одним NOAA Kp fetch, climate cache hit/miss, local `ClimateNormalDay`, all-eight current-day assessment, climate-only six-category fallback, существующим DailySummary и concise user-facing risk block. `today_handler.py` оставлен command/update orchestration; manual `/today` использует тот же service.
+
+`src/weather_alert_bot/daily_dispatch.py` реализует pure deterministic due decision в `ZoneInfo(settings.timezone)`: `onboarding_completed`, `daily_sending_enabled`, выбранный ISO weekday, точное local `HH:MM` и отсутствие успешной delivery на текущую local calendar date. Секунды внутри configured minute допускаются; catch-up semantics нет. Некорректные timezone/time/days дают safe error.
+
+`src/weather_alert_bot/runtime_state.py` добавляет отдельную `runtime_db_path`: default `~/.local/share/weather-alert-bot/runtime.sqlite3`, override `WEATHER_ALERT_BOT_RUNTIME_DB_PATH`. Таблица `daily_delivery_state` хранит per-chat successful local ISO date и UTC aware timestamp. Settings SQLite остаётся read-only, climate SQLite не используется для operational state, event tables не создавались. State mark выполняется только после успешного Telegram send; failure state write после send не вызывает вторую отправку в том же tick.
+
+Добавлен mutually exclusive `--run-daily-dispatch-once`: один aware UTC `current_time`, один tick, deterministic not-due/already-sent/sent output, без polling/sleep/loop. Not-due и already-sent не вызывают Weather/NOAA/Historical, не меняют climate cache и не вызывают Telegram `sendMessage`. Manual `/today` игнорирует scheduled delivery state и не помечает его.
+
+После implementation: **454 tests OK**; `compileall` и `git diff --check` успешно пройдены; tests используют fake/mock external clients. Controlled real scheduled Telegram/API validation ещё НЕ выполнялась. Следующий stop-point — controlled real one-shot dispatch validation. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Финальная точка: scheduled daily dispatch core controlled-real-validated
+
+Контролируемая real validation этого stage завершена 14.08.2026. Baseline перед implementation: `4891eb94ed19c9b596fa0aadf55ba372a1b8cb00`. Зафиксирован только one-shot scheduled daily dispatch core; permanent once-per-minute scheduler, daemon, cron и systemd не реализованы.
+
+`src/weather_alert_bot/daily_report.py` — общий reusable production report service для manual `/today` и scheduled dispatch. Общий flow включает Weather Forecast, NOAA SWPC Kp forecast, climate cache hit/miss, `ClimateNormalDay`, all-eight current-day risk assessment, climate-only six-category fallback, `DailySummary`, concise user-facing risk section и финальный Telegram text. Scheduled sender не содержит отдельной копии report logic. Manual `/today` переведён на тот же service, сохраняет прежнее production behavior и не зависит от scheduled-delivery runtime state.
+
+`src/weather_alert_bot/daily_dispatch.py` — только один dispatch decision/tick. Due определяется в сохранённой local timezone пользователя: onboarding completed, daily sending enabled, текущий ISO weekday входит в configured days, local `HH:MM` точно совпадает с configured time и успешная scheduled delivery за текущую local calendar date отсутствует. Seconds/microseconds внутри configured minute допустимы; catch-up `>= configured time` не реализован. Local date/weekday/time вычисляются в сохранённой timezone; automated tests покрывают timezone/date boundary и DST behavior.
+
+`src/weather_alert_bot/runtime_state.py` использует отдельную operational SQLite `~/.local/share/weather-alert-bot/runtime.sqlite3`, с override `WEATHER_ALERT_BOT_RUNTIME_DB_PATH`. Settings SQLite остаётся user-settings DB, climate SQLite — cache calculated climate normals, runtime SQLite — operational state. Таблица `daily_delivery_state` идентифицирует delivery по Telegram chat id и хранит `last_successful_local_date` и timestamp успешной отправки в UTC. Порядок строго: due → production report → Telegram send → успешный send → mark runtime delivery state. SQLite state не записывается до успешного Telegram send; transaction между Telegram API и SQLite не утверждается. Если запись state после успешного send не удалась, возможен редкий duplicate на следующем invocation, но повторный send в рамках одного tick не выполняется.
+
+CLI `--run-daily-dispatch-once` выполняет ровно один tick и завершается: нет polling loop, `while True`, sleep scheduler, cron, systemd или daemon. Внешний ручной wrapper со `sleep` применялся только для попадания в controlled target minute и частью production CLI не является.
+
+### Controlled real validation — 14.08.2026
+
+Тест использовал temporary settings/runtime SQLite:
+
+```text
+/tmp/weather-alert-daily-dispatch-test/settings.sqlite3
+/tmp/weather-alert-daily-dispatch-test/runtime.sqlite3
+```
+
+Production settings DB не редактировалась. Temporary copy была настроена на `TARGET_LOCAL=2026-08-14 15:08`, `TARGET_WEEKDAY=5`, timezone `Europe/Moscow`; production climate cache использовался через отдельный configured climate path. Telegram token был загружен из существующего env-файла вне Git и в вывод не попадал.
+
+External wrapper дождался target minute и вызвал `--run-daily-dispatch-once`. Historical hostname `archive-api.open-meteo.com` был заблокирован DNS guard. Фактический вывод:
+
+```text
+Ожидание target minute: 2026-08-14 15:08 Europe/Moscow
+WAIT_SECONDS=47.5
+Ежедневная сводка отправлена по расписанию.
+HISTORICAL_DNS_ATTEMPTS=0
+```
+
+Фактическое scheduled Telegram-сообщение:
+
+```text
+📍 Москва
+📅 14 августа 2026
+
+Погода: пасмурно
+Температура: +8.7…+18.2 °C
+Утром: +12.7 °C
+Днём: +18.2 °C
+
+Осадки: до 3%, наиболее вероятно около 18:00
+За сутки: 0 мм
+
+Ветер: до 18.1 км/ч
+Порывы: до 49.3 км/ч
+
+Магнитная активность: Kp до 3.67 в ближайшие 24 ч
+
+Риски сегодня: значимых по включённым категориям не выявлено.
+
+Сводка сформирована: 14.08.2026 15:08
+```
+
+Это подтвердило due decision, real production report generation, reusable report path, Weather, NOAA, climate-cache hit, all-eight current-day risk path, concise risk block, real Telegram send и успешное завершение scheduled CLI. `HISTORICAL_DNS_ATTEMPTS=0` подтверждает отсутствие Historical API request на cache hit. Positive real hazard case в этом запуске не возник: значимых risks фактически не выявлено.
+
+После успешной delivery temporary runtime DB содержала `daily_delivery_state` и ровно одну row для test owner: `(5230616172, '2026-08-14', '2026-08-14T12:08:00.133886+00:00')`. Успешная local date — `2026-08-14`; timestamp сохранён в UTC, `12:08 UTC` соответствует примерно `15:08 Europe/Moscow`.
+
+Для duplicate suppression schedule был переставлен на `2026-08-14 15:12 Europe/Moscow`; перед вторым invocation был установлен DNS guard для любых DNS lookups. Результат:
+
+```text
+Ожидание target minute: 2026-08-14 15:12 Europe/Moscow
+WAIT_SECONDS=106.2
+Ежедневная сводка за текущий день уже отправлена.
+DNS_ATTEMPTS=0
+```
+
+Persistent successful-delivery state остановил повторный tick до network/data-source requests: Weather, NOAA, Historical, report generation и Telegram send network path не запускались. Это persistent application-level dedup после successful recorded delivery, а не distributed exactly-once delivery.
+
+Production `settings.sqlite3` до и после controlled tests имела одинаковый SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; byte-for-byte integrity подтверждена. Temporary settings/runtime DB не добавлялись в Git.
+
+После implementation и real validation: **454 tests OK**, `compileall` успешно, `git diff --check` успешно. Real calls выполнялись только отдельной ручной controlled validation; Codex во время implementation real API/Telegram calls не выполнял. `technical_spec.md` unchanged, `next_steps.md` отсутствует, secrets/env не добавлены, commit и push не выполнялись.
+
+Текущий stop-point: scheduled daily dispatch core реализован, automated-tested и controlled-real-validated. Permanent once-per-minute scheduler, scheduler daemon, systemd, event persistence/lifecycle, five-day warning detection, event dedup/lifecycle, preliminary/update/start/end event notifications, urgent event delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds, user magnetic threshold, `/settings` и `/help` не реализованы. Следующий этап не выбирать и не реализовывать самостоятельно.

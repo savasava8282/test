@@ -7,6 +7,9 @@ DEFAULT_DB_PATH = Path("~/.local/share/weather-alert-bot/settings.sqlite3").expa
 DEFAULT_CLIMATE_DB_PATH = Path(
     "~/.local/share/weather-alert-bot/climate_normals.sqlite3"
 ).expanduser()
+DEFAULT_RUNTIME_DB_PATH = Path(
+    "~/.local/share/weather-alert-bot/runtime.sqlite3"
+).expanduser()
 
 
 class ConfigError(RuntimeError):
@@ -18,6 +21,7 @@ class Settings:
     telegram_bot_token: str | None = field(repr=False)
     db_path: Path
     climate_db_path: Path = DEFAULT_CLIMATE_DB_PATH
+    runtime_db_path: Path = DEFAULT_RUNTIME_DB_PATH
 
 
 def load_settings(*, require_telegram_token: bool = False) -> Settings:
@@ -33,6 +37,14 @@ def load_settings(*, require_telegram_token: bool = False) -> Settings:
         if configured_climate_db_path
         else DEFAULT_CLIMATE_DB_PATH
     )
+    configured_runtime_db_path = os.environ.get(
+        "WEATHER_ALERT_BOT_RUNTIME_DB_PATH", ""
+    ).strip()
+    runtime_db_path = (
+        Path(configured_runtime_db_path).expanduser()
+        if configured_runtime_db_path
+        else DEFAULT_RUNTIME_DB_PATH
+    )
 
     if require_telegram_token and token is None:
         raise ConfigError("Переменная окружения TELEGRAM_BOT_TOKEN не задана.")
@@ -41,4 +53,5 @@ def load_settings(*, require_telegram_token: bool = False) -> Settings:
         telegram_bot_token=token,
         db_path=db_path,
         climate_db_path=climate_db_path,
+        runtime_db_path=runtime_db_path,
     )

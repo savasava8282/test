@@ -3,27 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 import sys
 
-from weather_alert_bot.climate_cache import (
-    ClimateCacheError,
-    SQLiteClimateNormalsCache,
-    get_or_create_climate_normals,
-)
-from weather_alert_bot.climate_normals import (
-    ClimateNormalsError,
-    OpenMeteoHistoricalWeatherClient,
-    get_climate_normal_for_date,
-    local_calendar_date,
-)
-from weather_alert_bot.daily_summary import (
-    DailySummaryError,
-    build_daily_summary,
-    format_daily_risk_section,
-    format_daily_summary,
+from weather_alert_bot.climate_cache import SQLiteClimateNormalsCache
+from weather_alert_bot.climate_normals import OpenMeteoHistoricalWeatherClient
+from weather_alert_bot.daily_report import (
+    CLIMATE_FALLBACK_DIAGNOSTIC,
+    build_production_daily_report,
 )
 from weather_alert_bot.geomagnetic_forecast import (
     GeomagneticForecastError,
     NoaaSwpcGeomagneticClient,
 )
+from weather_alert_bot.daily_summary import DailySummaryError, build_daily_summary
 from weather_alert_bot.risk_assessment import RiskAssessmentError, assess_current_day_risks
 from weather_alert_bot.start_handler import _next_offset
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError, UserSettings
@@ -75,43 +65,16 @@ def _handle_today(
         return 1
 
     try:
-        weather = weather_client.fetch(
-            owner.latitude,
-            owner.longitude,
-            owner.timezone,
+        text = build_production_daily_report(
+            owner=owner,
+            weather_client=weather_client,
+            geomagnetic_client=geomagnetic_client,
+            climate_cache=climate_cache,
+            historical_client=historical_client,
+            formed_at=formed_at,
+            summary_builder=build_daily_summary,
+            risk_assessor=assess_current_day_risks,
         )
-        geomagnetic = geomagnetic_client.fetch()
-        summary = build_daily_summary(
-            owner,
-            weather,
-            geomagnetic,
-            formed_at,
-        )
-
-        climate_normal = None
-        try:
-            normals = get_or_create_climate_normals(
-                climate_cache,
-                historical_client,
-                owner.latitude,
-                owner.longitude,
-                owner.timezone,
-                formed_at,
-            )
-            target_date = local_calendar_date(formed_at, owner.timezone)
-            climate_normal = get_climate_normal_for_date(normals, target_date)
-        except (ClimateCacheError, ClimateNormalsError):
-            print(CLIMATE_FALLBACK_DIAGNOSTIC, file=sys.stderr)
-
-        assessment = assess_current_day_risks(
-            weather,
-            geomagnetic,
-            owner.timezone,
-            formed_at,
-            climate_normal=climate_normal,
-        )
-        risk_section = format_daily_risk_section(assessment, owner)
-        text = format_daily_summary(summary, risk_section=risk_section)
     except (
         WeatherForecastError,
         GeomagneticForecastError,

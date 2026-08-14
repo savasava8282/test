@@ -23,6 +23,11 @@ from weather_alert_bot.climate_normals import (
 from weather_alert_bot.config import ConfigError, load_settings
 from weather_alert_bot.confirmed_city_handler import run_until_confirmed_city
 from weather_alert_bot.daily_days_handler import run_until_daily_days
+from weather_alert_bot.daily_dispatch import (
+    DailyDispatchError,
+    evaluate_daily_dispatch_due,
+    run_daily_dispatch_once,
+)
 from weather_alert_bot.daily_sending_handler import run_until_daily_sending
 from weather_alert_bot.daily_time_handler import run_until_daily_time
 from weather_alert_bot.daily_summary import (
@@ -42,6 +47,7 @@ from weather_alert_bot.risk_assessment import (
     assess_current_day_risks,
     format_current_day_risk_assessment,
 )
+from weather_alert_bot.runtime_state import RuntimeStateError, SQLiteRuntimeStateStore
 from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
@@ -155,6 +161,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="дождаться одной новой команды /today владельца и отправить сводку",
     )
     telegram_group.add_argument(
+        "--run-daily-dispatch-once",
+        action="store_true",
+        help="однократно проверить расписание и отправить ежедневную сводку при необходимости",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -199,6 +210,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _refresh_climate_cache()
     if args.wait_for_today:
         return _wait_for_today()
+    if args.run_daily_dispatch_once:
+        return _run_daily_dispatch_once()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -665,6 +678,66 @@ def _wait_for_today() -> int:
     except (ConfigError, StorageError, TelegramApiError, ClimateCacheError):
         print("Ошибка обработки команды /today.", file=sys.stderr)
         return 1
+
+
+def _run_daily_dispatch_once() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        owner = storage.get_single_user_settings()
+        if owner is None:
+            print("Сохранённый владелец не найден.", file=sys.stderr)
+            return 1
+
+        runtime_state = SQLiteRuntimeStateStore(settings.runtime_db_path)
+        current_time = datetime.now(timezone.utc)
+        state = runtime_state.get_daily_delivery_state(owner.telegram_chat_id)
+        decision = evaluate_daily_dispatch_due(
+            owner,
+            current_time,
+            None if state is None else state.last_successful_local_date,
+        )
+        if decision.status != "due":
+            _print_daily_dispatch_status(decision.status)
+            return 0
+
+        result = run_daily_dispatch_once(
+            owner=owner,
+            runtime_state=runtime_state,
+            weather_client=OpenMeteoWeatherClient(),
+            geomagnetic_client=NoaaSwpcGeomagneticClient(),
+            climate_cache=SQLiteClimateNormalsCache(settings.climate_db_path),
+            historical_client=OpenMeteoHistoricalWeatherClient(),
+            telegram_client=TelegramClient(settings.telegram_bot_token),
+            current_time=current_time,
+        )
+    except KeyboardInterrupt:
+        return 130
+    except (
+        ConfigError,
+        StorageError,
+        RuntimeStateError,
+        DailyDispatchError,
+        TelegramApiError,
+        ClimateCacheError,
+    ):
+        print("Ошибка выполнения ежедневной рассылки.", file=sys.stderr)
+        return 1
+
+    _print_daily_dispatch_status(result.status)
+    return 0
+
+
+def _print_daily_dispatch_status(status: str) -> None:
+    if status == "not_due":
+        print("Ежедневная сводка сейчас не запланирована.")
+    elif status == "already_sent":
+        print("Ежедневная сводка за текущий день уже отправлена.")
+    else:
+        print("Ежедневная сводка отправлена по расписанию.")
 
 
 def _check_telegram() -> int:

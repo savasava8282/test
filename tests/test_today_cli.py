@@ -34,6 +34,7 @@ class TodayCliTest(unittest.TestCase):
             telegram_bot_token=TEST_TOKEN,
             db_path=Path("/tmp/test-today-settings.sqlite3"),
             climate_db_path=Path("/tmp/test-today-climate.sqlite3"),
+            runtime_db_path=Path("/tmp/test-today-runtime.sqlite3"),
         )
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": TEST_TOKEN}, clear=True):
             with patch("weather_alert_bot.app.load_settings", return_value=settings):
@@ -101,6 +102,7 @@ class TodayCliTest(unittest.TestCase):
             "--fetch-weather-forecast",
             "--fetch-kp-forecast",
             "--preview-daily-summary",
+            "--run-daily-dispatch-once",
             "--geocode-city",
         )
         for action in actions:
