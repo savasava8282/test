@@ -12,8 +12,10 @@ from weather_alert_bot.climate_normals import (
     BASELINE_END,
     BASELINE_START,
     ClimateNormalDay,
+    ClimateNormals,
     ClimateNormalsError,
     HistoricalTemperatureDay,
+    calculate_climate_normals,
 )
 from weather_alert_bot.geocoding import GeocodingLocation
 from weather_alert_bot.geomagnetic_forecast import (
@@ -95,6 +97,7 @@ class RiskAssessmentCliTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary_directory.name) / "settings.sqlite3"
+        self.climate_path = Path(self.temporary_directory.name) / "climate.sqlite3"
         self.historical_client_patch = patch(
             "weather_alert_bot.app.OpenMeteoHistoricalWeatherClient"
         )
@@ -110,7 +113,10 @@ class RiskAssessmentCliTest(unittest.TestCase):
         stderr = io.StringIO()
         with patch.dict(
             os.environ,
-            {"WEATHER_ALERT_BOT_DB_PATH": str(self.path)},
+            {
+                "WEATHER_ALERT_BOT_DB_PATH": str(self.path),
+                "WEATHER_ALERT_BOT_CLIMATE_DB_PATH": str(self.climate_path),
+            },
             clear=True,
         ):
             with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -235,7 +241,9 @@ class RiskAssessmentCliTest(unittest.TestCase):
         self.save_city()
         current_time = datetime(2026, 8, 11, 21, tzinfo=timezone.utc)
         normal = climate_normal()
-        calculated_normals = object()
+        calculated_normals = calculate_climate_normals(
+            historical_records(), 55.75204, 37.61781, "Europe/Moscow"
+        )
         assessment = CurrentDayRiskAssessment(
             local_date=date(2026, 8, 12),
             signals=(),

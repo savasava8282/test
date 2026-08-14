@@ -729,3 +729,56 @@ Automatic heat/cold business logic реализована: default deviation thr
 Full suite: **386 tests OK**. Scheduler, event storage, dedup/lifecycle, notifications и NOAA watches/warnings/alerts ещё не подключены. Следующий архитектурный этап отдельно выбирается техническим лидером.
 
 `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Актуальная точка: climate cache/persistence и controlled real validation завершены
+
+Реализован production-oriented persistence layer `src/weather_alert_bot/climate_cache.py` для уже рассчитанных ClimateNormals 1991–2020.
+
+- Climate data хранится в отдельной SQLite-базе `~/.local/share/weather-alert-bot/climate_normals.sqlite3`; production settings остаются в `~/.local/share/weather-alert-bot/settings.sqlite3`, climate data в schema `user_settings` не добавлялись. Путь переопределяется через `WEATHER_ALERT_BOT_CLIMATE_DB_PATH`; `WEATHER_ALERT_BOT_DB_PATH` по-прежнему относится только к settings DB.
+- Cache хранит calculated snapshot: metadata/set identity и полный набор из 366 calendar-day records, включая отдельный 29 February. Raw historical dataset 1991–2020 в cache не сохраняется.
+- Identity строится по location coordinates, timezone, baseline `1991-01-01`—`2020-12-31`, model `era5_land` и cache format/schema version; city display name в ключ не входит. При смене coordinates/timezone новая identity получает отдельный set, старую запись удалять не требуется.
+- Поддерживаются lookup, miss, atomic save/overwrite, strict validation, corruption errors, read-only mode, multiple identities, explicit refresh и versioned schema. Проверяются metadata, aware UTC generated timestamp, finite temperatures, `min <= max`, positive integer sample counts и полный набор 366 дней; автоматического destructive repair нет.
+- Production orchestration: cache hit использует `ClimateNormals` без Historical API; cache miss выполняет Historical request, calculation и atomic cache save. Automatic TTL отсутствует: cache действует до explicit refresh либо изменения identity inputs/version. Ошибки Historical/calculation/write не оставляют частичный set.
+- `--refresh-climate-cache` читает saved user settings, не требует Telegram token, выполняет Historical request, пересчитывает normals и перезаписывает соответствующий snapshot; Forecast, NOAA и Telegram не используются. `--preview-climate-normal` остаётся прямым source/calculation diagnostic и cache lookup не использует.
+- `--preview-current-risks` читает settings SQLite read-only, по-прежнему запрашивает Forecast и NOAA, а climate stage делает cache-aware lookup. При hit Historical API не вызывается; при miss выполняется один Historical request и сохраняются рассчитанные normals. Current-day detector получает climate normal и работает в all-eight mode. `/today` в этот stage не интегрирован с risk assessment/cache.
+
+### Controlled real cache validation — 13.08.2026
+
+До validation production settings SQLite имела SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; climate cache отсутствовал (`CLIMATE_CACHE_ABSENT`).
+
+Первый запуск был cache miss:
+
+```text
+PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks
+```
+
+Фактический output:
+
+```text
+Дата: 13.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+```
+
+Так как `climate_normals.sqlite3` отсутствовал, запуск прошёл через Historical 1991–2020 calculation и создал отдельную SQLite. После запуска в `~/.local/share/weather-alert-bot/climate_normals.sqlite3` были обнаружены таблицы `climate_normal_sets` и `climate_normal_days`; counts: соответственно `1` и `366`. Размер файла на момент проверки был примерно 40K — это наблюдение данного controlled test, не invariant.
+
+Второй запуск был доказательным cache hit. Guard блокировал DNS только для `archive-api.open-meteo.com`; Forecast и NOAA network paths не блокировались. Фактический output:
+
+```text
+Дата: 13.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+HISTORICAL_DNS_ATTEMPTS=0
+```
+
+`HISTORICAL_DNS_ATTEMPTS=0` подтверждает отсутствие попытки обращения к Historical API hostname: cache entry прочитан, all-eight current-day calculation продолжил работать, повторная загрузка historical 1991–2020 не потребовалась. Forecast и NOAA не считаются закэшированными и остаются отдельными live data requests. Positive real hazard case этим запуском не подтверждён: фактический результат оба раза был `значимых не выявлено`.
+
+После miss и hit SHA-256 production settings SQLite снова составила `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte совпав с SHA до validation. Следовательно, `settings.sqlite3` не изменялась climate cache workflow; отдельно созданная `climate_normals.sqlite3` ожидаемо была записана.
+
+Full suite после implementation: **405 tests OK**. `compileall` успешно; `git diff --check` успешно. Все HTTP tests fake/mock. Codex implementation task не выполняла real API/Telegram requests; описанная выше controlled real validation была выполнена вручную после реализации.
+
+Текущий stop-point: climate cache/persistence implementation и controlled real cache miss → cache hit validation завершены. Следующий production stage выбирает технический лидер отдельно; ближайший stage — отдельная интеграция существующего all-eight current-day risk assessment в daily summary `/today` с использованием climate cache. В рамках этой задачи `/today`, daily summary risk formatting, custom heat/cold thresholds, scheduler, event persistence/lifecycle, dedup, notification delivery, NOAA watches/warnings/alerts, permanent polling и systemd не реализовывались.
+
+`technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.

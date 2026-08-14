@@ -5,10 +5,10 @@
 | Каталог или модуль | За что отвечает | Статус | Комментарий |
 |---|---|---|---|
 | `src/weather_alert_bot/` | Основной Python-пакет проекта | created | Пакет размещён по схеме `src` |
-| `src/weather_alert_bot/app.py` | CLI, обычный запуск, существующие режимы и `--preview-current-risks` | updated | Все режимы взаимоисключающие; новый preview не требует Telegram и сохраняет прежние режимы |
+| `src/weather_alert_bot/app.py` | CLI, обычный запуск, существующие режимы, cache-aware `--preview-current-risks` и `--refresh-climate-cache` | updated | Все режимы взаимоисключающие; current-risks не требует Telegram и использует отдельный climate cache |
 | `src/weather_alert_bot/geocoding.py` | Однократный Open-Meteo Geocoding API client и неизменяемая модель локации | created | Один GET-запрос без ключа, локальная проверка, безопасный JSON-разбор, без хранения и прогноза |
 | `src/weather_alert_bot/__main__.py` | Запуск пакета через `python3 -m weather_alert_bot` | created | Передаёт выполнение в `main()` |
-| `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | created | Токен скрывается из `repr`; настоящий токен не читался |
+| `src/weather_alert_bot/config.py` | `Settings`, `ConfigError` и загрузчик окружения | updated | Токен скрывается из `repr`; settings DB и climate DB имеют отдельные paths/env overrides |
 | `src/weather_alert_bot/storage.py` | SQLite-хранилище пользовательских настроек | updated | Только `sqlite3`; безопасно мигрирует `daily_send_time`, `daily_send_days`, `daily_sending_enabled`, `urgent_warnings_enabled`, восемь `warning_*_enabled` полей и `onboarding_completed` с default `07:00`, `1,2,3,4,5,6,7`, `1`, `1`, `1` и `0`, сохраняет upsert города без сброса настроек и отдельно обновляет время, дни, daily sending, срочные предупреждения, категории или completion flag по существующему `telegram_chat_id` |
 | `src/weather_alert_bot/telegram_api.py` | `TelegramClient`, модели данных и безопасный API-слой | updated | Поддерживает `getUpdates`, `sendMessage` и прежний `getMe` |
 | `src/weather_alert_bot/start_handler.py` | Однократное ожидание новой приватной `/start` | created | Очищает старые обновления без ответа, отвечает один раз и завершается; сценарий подтверждён контролируемым реальным запуском |
@@ -23,7 +23,9 @@
 | `src/weather_alert_bot/settings_summary_handler.py` | Однократная read-only итоговая сводка сохранённых onboarding-настроек | created | После новой приватной `/start` читает существующий `UserSettings`, отправляет стабильную сводку без записи в SQLite и безопасно завершается; автоматически проверен и подтверждён контролируемым реальным Telegram-тестом |
 | `src/weather_alert_bot/onboarding_complete_handler.py` | Однократное финальное подтверждение и завершение первоначальной настройки | created | После новой приватной `/start` повторно показывает `format_settings_summary()`, принимает `Да`/`Нет`, при `Да` вызывает `mark_onboarding_completed()`, при `Нет` не меняет SQLite; автоматически проверен и подтверждён контролируемым реальным Telegram + SQLite-тестом обеих веток |
 | `src/weather_alert_bot/today_handler.py` | Однократная обработка новой приватной `/today` владельца | created | Читает единственного владельца через переданное read-only storage, очищает старые updates без ответа, проверяет chat ID и onboarding, после корректной команды вызывает существующие weather/Kp clients и daily summary builder/formatter, отправляет один результат и завершается; real Telegram/API-тест ещё не выполнялся |
-| `src/weather_alert_bot/risk_assessment.py` | Pure/deterministic current-day risk assessment для шести подключённых категорий | created | Immutable policy, signals и assessment; использует только переданные WeatherForecast/GeomagneticForecast, ZoneInfo и explicit aware formation time; heat/cold остаются unsupported |
+| `src/weather_alert_bot/climate_normals.py` | Historical Weather API client и pure calculation exact calendar-day ClimateNormals 1991–2020 | created | Полный snapshot из 366 calendar days, включая 29 February; raw historical dataset не является persistence format |
+| `src/weather_alert_bot/climate_cache.py` | Отдельный SQLite cache рассчитанных ClimateNormals | created | Metadata/set identity, 366 day records, strict validation, corruption errors, atomic overwrite, read-only mode, multiple identities, explicit refresh и versioned schema; `user_settings` не используется |
+| `src/weather_alert_bot/risk_assessment.py` | Pure/deterministic current-day risk assessment для восьми категорий при ClimateNormalDay | created | Immutable policy, signals и assessment; без climate normal сохраняется six-category compatibility mode |
 | `tests/` | Автоматические проверки проекта | updated | Тесты геокодирования используют только стандартный `unittest` и mock; реальные сетевые вызовы не выполняются |
 | `tests/test_smoke.py` | Обычный CLI и сценарии `--wait-for-start` | updated | Реальные запросы не выполняются |
 | `tests/test_config.py` | Безопасная загрузка настройки токена | updated | Используется только `123456789:TEST_TOKEN_NOT_REAL` |
@@ -46,6 +48,8 @@
 | `tests/test_today_handler.py` | One-shot `/today`, owner validation, data clients, formatter, ошибки и read-only поведение | created | Проверяет очистку старых updates, обе формы команды, private/group/чужие chats, onboarding, `daily_sending_enabled = 0`, safe errors, Telegram errors, fixed aware time, завершение и неизменность SQLite через fake/mock и временные базы |
 | `tests/test_risk_assessment.py` | Current-day detector thresholds, local date, timezone conversion, statuses, stable signals и formatter | created | Fake immutable forecasts; покрывает шесть категорий, Kp mapping G1–G5, unsupported heat/cold и custom policy |
 | `tests/test_risk_assessment_cli.py` | Diagnostic `--preview-current-risks` wiring и safe CLI behavior | created | Fake weather/Kp clients, read-only SQLite, отсутствие Telegram token, safe errors и mutual exclusion |
+| `tests/test_climate_cache.py` | SQLite climate cache persistence, identity, validation и atomicity | created | Temporary SQLite; hit/miss primitives, overwrite, read-only, corruption, multiple identities и 366-day snapshots |
+| `tests/test_climate_cache_cli.py` | Climate cache CLI orchestration и mutual exclusion | created | Fake Historical/weather/NOAA clients; cache miss/hit, refresh, settings read-only behavior и отсутствие real network |
 | `tests/test_today_cli.py` | CLI-режим `--wait-for-today` | created | Проверяет обязательный token, read-only storage, existing clients, current aware datetime, help, safe storage error и mutual exclusion со всеми actions |
 
 ## Актуальный runtime-статус onboarding
@@ -445,3 +449,13 @@ SHA-256 production SQLite до и после совпала: `dd249d550da41f27c6
 - Full suite: **386 tests OK**. Telegram, `/today`, scheduler, event lifecycle, notification delivery и NOAA watches/warnings/alerts к detector не подключены.
 
 Следующий архитектурный этап отдельно выбирается техническим лидером: сначала спроектировать climate cache/persistence для production path, затем отдельно рассматривать `/today` integration. `technical_spec.md` не менять; `next_steps.md` не создавать.
+## Climate cache layer — этап закрыт
+
+- `src/weather_alert_bot/climate_cache.py` — отдельное SQLite-хранилище calculated ClimateNormals 1991–2020. Таблицы `climate_normal_sets` и `climate_normal_days` хранят metadata/set identity и полный snapshot из 366 calendar days, включая 29 February; raw historical data и `user_settings` не используются.
+- `SQLiteClimateNormalsCache` — writable schema, read-only открытие, strict validation, corruption errors, atomic snapshot replacement/overwrite, multiple location identities, explicit refresh и versioned cache format/schema.
+- `CachedClimateNormals` — immutable wrapper с normals и generated/model/source/schema metadata; `get_or_create_climate_normals()` реализует hit/miss orchestration, `refresh_climate_normals()` — unconditional refresh.
+- `src/weather_alert_bot/config.py` — независимые `Settings.climate_db_path` и `WEATHER_ALERT_BOT_CLIMATE_DB_PATH`; `db_path` остаётся только settings DB.
+- `src/weather_alert_bot/app.py` — cache-aware `--preview-current-risks` и `--refresh-climate-cache`. Refresh читает saved settings, не требует Telegram token и использует только Historical/calculation/cache. `--preview-climate-normal` остаётся direct source diagnostic.
+- `tests/test_climate_cache.py` и `tests/test_climate_cache_cli.py` — temporary SQLite, fake Historical/weather/NOAA clients, validation, atomicity, read-only, miss/hit, refresh и mutual exclusion; full suite после implementation: **405 tests OK**.
+- Controlled real validation 13.08.2026: initial `CLIMATE_CACHE_ABSENT`, первый `--preview-current-risks` создал set/day counts `1/366`; повторный запуск с Historical-only DNS guard дал `HISTORICAL_DNS_ATTEMPTS=0`. Production settings SHA-256 до/после неизменен: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`.
+- `/today` пока не подключён к risk assessment/cache; TTL отсутствует. `technical_spec.md` не изменён, `next_steps.md` отсутствует.

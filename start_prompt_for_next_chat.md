@@ -661,3 +661,31 @@ Production SQLite до и после имеет SHA-256 `dd249d550da41f27c6d2081
 Итоги: automatic heat/cold logic реализована, default deviation `7.0 °C`, thresholds inclusive; без climate normal сохраняется six-category mode; user season/month/custom thresholds и climate cache/persistence отсутствуют; diagnostic historical request пока выполняется при каждом ручном запуске и не является финальной production architecture; `/today` ещё не интегрирован.
 
 Full suite — **386 tests OK**. Scheduler, event storage, dedup/lifecycle, notifications и NOAA watches/warnings/alerts ещё не реализованы. Следующий архитектурный этап отдельно выбирает технический лидер. Не менять `technical_spec.md`, не создавать `next_steps.md`, не делать commit/push.
+## Текущая точка после закрытия climate cache/persistence stage
+
+Baseline перед implementation был `b03199ad14e56bbfe26f796f5a358b59bb82a52f`; implementation и tests остаются незакоммиченными в рабочем дереве. Climate cache/persistence и controlled real miss → hit validation завершены, поэтому этот stage не продолжать.
+
+Создан отдельный `src/weather_alert_bot/climate_cache.py` и SQLite `~/.local/share/weather-alert-bot/climate_normals.sqlite3`. Cache хранит calculated snapshot ClimateNormals 1991–2020: metadata/set identity и 366 day records, включая отдельный 29 February; raw historical dataset не сохраняется. Identity использует coordinates, timezone, fixed baseline, fixed `era5_land` и cache schema/version. Поддерживаются lookup/miss, atomic save/overwrite, strict validation, corruption errors, read-only mode, multiple identities и explicit refresh; TTL отсутствует.
+
+В `config.py` добавлены отдельные `climate_db_path` и `WEATHER_ALERT_BOT_CLIMATE_DB_PATH`; production `settings.sqlite3` и schema `user_settings` climate data не затрагивает. В `app.py` `--preview-current-risks` cache-aware, а `--refresh-climate-cache` читает saved settings, не требует Telegram token и не использует Forecast/NOAA/Telegram. `--preview-climate-normal` остаётся direct source/calculation diagnostic. `/today` не интегрирован.
+
+### Фактическая controlled real validation — 13.08.2026
+
+До запуска settings SQLite имела SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, climate cache отсутствовал (`CLIMATE_CACHE_ABSENT`). Первый запуск `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` вывел:
+
+```text
+Дата: 13.08.2026
+
+Риски по подключённым категориям:
+значимых не выявлено.
+```
+
+Это был cache miss: Historical 1991–2020 calculation создал отдельный `climate_normals.sqlite3`. В нём обнаружены `climate_normal_sets` и `climate_normal_days`, counts `1` и `366`; размер около 40K — только наблюдение validation, не invariant.
+
+Второй запуск повторил тот же output и выполнялся с DNS guard, блокировавшим только `archive-api.open-meteo.com`. Forecast/NOAA paths не блокировались. Output также содержал `HISTORICAL_DNS_ATTEMPTS=0`, что подтверждает cache hit без попытки Historical API. All-eight current-day calculation продолжил работать. Forecast и NOAA не считаются cached; оба запуска дали `значимых не выявлено.`, positive real hazard case не утверждается.
+
+После miss и hit SHA settings SQLite остался `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte совпав с SHA до запуска. Значит, climate cache workflow не изменил production `settings.sqlite3`; отдельно созданная climate SQLite была ожидаемо записана.
+
+Full suite после implementation: **405 tests OK**; `compileall` и `git diff --check` успешны. Все HTTP tests fake/mock. Codex implementation task real API/Telegram requests не выполняла. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit/push не делать.
+
+Следующий production stage выбирается техническим лидером отдельно. Ближайший stage — интеграция существующего all-eight current-day risk assessment в daily summary `/today` с использованием climate cache. В этой задаче не реализовывать `/today`, daily summary risk formatting, custom heat/cold thresholds, scheduler, event persistence/lifecycle, dedup, notification delivery, NOAA watches/warnings/alerts, permanent polling или systemd.

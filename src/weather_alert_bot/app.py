@@ -4,7 +4,15 @@ import sys
 from collections.abc import Sequence
 
 from weather_alert_bot.city_handler import run_until_city
+from weather_alert_bot.climate_cache import (
+    ClimateCacheError,
+    SQLiteClimateNormalsCache,
+    get_or_create_climate_normals,
+    refresh_climate_normals,
+)
 from weather_alert_bot.climate_normals import (
+    BASELINE_END,
+    BASELINE_START,
     ClimateNormalsError,
     OpenMeteoHistoricalWeatherClient,
     calculate_climate_normals,
@@ -137,6 +145,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="показать климатическую норму текущего календарного дня без Telegram",
     )
     telegram_group.add_argument(
+        "--refresh-climate-cache",
+        action="store_true",
+        help="обновить сохранённую климатическую норму без Telegram",
+    )
+    telegram_group.add_argument(
         "--wait-for-today",
         action="store_true",
         help="дождаться одной новой команды /today владельца и отправить сводку",
@@ -182,6 +195,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _preview_current_risks()
     if args.preview_climate_normal:
         return _preview_climate_normal()
+    if args.refresh_climate_cache:
+        return _refresh_climate_cache()
     if args.wait_for_today:
         return _wait_for_today()
     if args.geocode_city is not None:
@@ -518,16 +533,15 @@ def _preview_current_risks() -> int:
             user_settings.timezone,
         )
         geomagnetic = NoaaSwpcGeomagneticClient().fetch()
-        historical_days = OpenMeteoHistoricalWeatherClient().fetch(
+        climate_cache = SQLiteClimateNormalsCache(settings.climate_db_path)
+        normals = get_or_create_climate_normals(
+            climate_cache,
+            OpenMeteoHistoricalWeatherClient(),
             user_settings.latitude,
             user_settings.longitude,
             user_settings.timezone,
-        )
-        normals = calculate_climate_normals(
-            historical_days,
-            user_settings.latitude,
-            user_settings.longitude,
-            user_settings.timezone,
+            current_time,
+            calculator=calculate_climate_normals,
         )
         target_date = local_calendar_date(current_time, user_settings.timezone)
         climate_normal = get_climate_normal_for_date(normals, target_date)
@@ -551,7 +565,7 @@ def _preview_current_risks() -> int:
     except GeomagneticForecastError:
         print("Ошибка получения прогноза Kp NOAA SWPC.", file=sys.stderr)
         return 1
-    except ClimateNormalsError:
+    except (ClimateNormalsError, ClimateCacheError):
         print("Ошибка получения климатической нормы.", file=sys.stderr)
         return 1
     except RiskAssessmentError:
@@ -590,6 +604,40 @@ def _preview_climate_normal() -> int:
         return 1
     except ClimateNormalsError:
         print("Ошибка получения климатической нормы.", file=sys.stderr)
+        return 1
+
+
+def _refresh_climate_cache() -> int:
+    try:
+        settings = load_settings(require_telegram_token=False)
+        storage = SQLiteSettingsStore(settings.db_path, read_only=True)
+        user_settings = storage.get_single_user_settings()
+        if user_settings is None:
+            print("Сохранённый город не найден.", file=sys.stderr)
+            return 1
+
+        climate_cache = SQLiteClimateNormalsCache(settings.climate_db_path)
+        refresh_climate_normals(
+            climate_cache,
+            OpenMeteoHistoricalWeatherClient(),
+            user_settings.latitude,
+            user_settings.longitude,
+            user_settings.timezone,
+            datetime.now(timezone.utc),
+            calculator=calculate_climate_normals,
+        )
+        print("Кэш климатической нормы обновлён.")
+        print(f"Период: {BASELINE_START.year}–{BASELINE_END.year}")
+        print("Модель: ERA5-Land")
+        print("Календарных дней: 366")
+        return 0
+    except KeyboardInterrupt:
+        return 130
+    except (ConfigError, StorageError):
+        print("Ошибка чтения сохранённых настроек города.", file=sys.stderr)
+        return 1
+    except (ClimateNormalsError, ClimateCacheError):
+        print("Ошибка обновления климатической нормы.", file=sys.stderr)
         return 1
 
 
