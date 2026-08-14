@@ -3,9 +3,11 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from weather_alert_bot.daily_summary import (
+    DAILY_RISK_CATEGORY_MAPPING,
     DailySummary,
     DailySummaryError,
     build_daily_summary,
+    format_daily_risk_section,
     format_daily_summary,
 )
 from weather_alert_bot.geomagnetic_forecast import (
@@ -13,6 +15,10 @@ from weather_alert_bot.geomagnetic_forecast import (
     GeomagneticForecastInterval,
 )
 from weather_alert_bot.storage import UserSettings
+from weather_alert_bot.risk_assessment import (
+    CurrentDayRiskAssessment,
+    RiskSignal,
+)
 from weather_alert_bot.weather_forecast import (
     DailyForecast,
     HourlyForecast,
@@ -275,3 +281,116 @@ class DailySummaryFormattingTest(unittest.TestCase):
                 )
             ),
         )
+
+    def test_risk_section_no_signals_has_stable_user_facing_text(self) -> None:
+        assessment = CurrentDayRiskAssessment(SUMMARY_DATE, ())
+        self.assertEqual(
+            format_daily_risk_section(assessment, settings()),
+            "Риски сегодня: значимых по включённым категориям не выявлено.",
+        )
+
+    def test_risk_section_uses_all_display_names_in_detector_order(self) -> None:
+        categories = tuple(category for category, _, _ in DAILY_RISK_CATEGORY_MAPPING)
+        assessment = CurrentDayRiskAssessment(
+            SUMMARY_DATE,
+            tuple(RiskSignal(category, "technical reason") for category in categories),
+        )
+        result = format_daily_risk_section(assessment, settings())
+        expected = ["Риски сегодня:"]
+        expected.extend(f"• {display_name}" for _, _, display_name in DAILY_RISK_CATEGORY_MAPPING)
+        self.assertEqual(result, "\n".join(expected))
+
+    def test_risk_section_filters_each_category_using_explicit_mapping(self) -> None:
+        for category, setting_field, display_name in DAILY_RISK_CATEGORY_MAPPING:
+            with self.subTest(category=category):
+                disabled = settings()
+                disabled = UserSettings(
+                    **{
+                        field: getattr(disabled, field)
+                        for field in disabled.__dataclass_fields__
+                        if field != setting_field
+                    },
+                    **{setting_field: False},
+                )
+                assessment = CurrentDayRiskAssessment(
+                    SUMMARY_DATE,
+                    (RiskSignal(category, "technical reason"),),
+                )
+                result = format_daily_risk_section(assessment, disabled)
+                self.assertEqual(
+                    result,
+                    "Риски сегодня: значимых по включённым категориям не выявлено.",
+                )
+                self.assertNotIn(display_name, result)
+
+    def test_ice_uses_warning_icing_setting_and_disabled_signal_does_not_remove_weather(self) -> None:
+        disabled = UserSettings(
+            **{
+                field: getattr(settings(), field)
+                for field in settings().__dataclass_fields__
+                if field != "warning_icing_enabled"
+            },
+            warning_icing_enabled=False,
+        )
+        risk_section = format_daily_risk_section(
+            CurrentDayRiskAssessment(SUMMARY_DATE, (RiskSignal("ice", "technical reason"),)),
+            disabled,
+        )
+        summary = build_daily_summary(disabled, weather(), geomagnetic(), FORMED_AT)
+        message = format_daily_summary(summary, risk_section=risk_section)
+        self.assertIn("Погода: дождь", message)
+        self.assertNotIn("гололёд", message)
+
+    def test_climate_unavailable_note_is_filtered_by_enabled_heat_and_cold(self) -> None:
+        assessment = CurrentDayRiskAssessment(SUMMARY_DATE, (), ("heat", "cold"))
+        self.assertEqual(
+            format_daily_risk_section(assessment, settings()),
+            "Риски сегодня: значимых по включённым категориям не выявлено.\n"
+            "Временно не оценены: сильная жара, сильный холод.",
+        )
+
+        heat_only = UserSettings(
+            **{
+                field: getattr(settings(), field)
+                for field in settings().__dataclass_fields__
+                if field != "warning_cold_enabled"
+            },
+            warning_cold_enabled=False,
+        )
+        self.assertEqual(
+            format_daily_risk_section(assessment, heat_only),
+            "Риски сегодня: значимых по включённым категориям не выявлено.\n"
+            "Временно не оценены: сильная жара.",
+        )
+
+    def test_urgent_and_daily_sending_preferences_do_not_filter_manual_risks(self) -> None:
+        manual_only = UserSettings(
+            **{
+                field: getattr(settings(), field)
+                for field in settings().__dataclass_fields__
+                if field not in {"urgent_warnings_enabled", "daily_sending_enabled"}
+            },
+            urgent_warnings_enabled=False,
+            daily_sending_enabled=False,
+        )
+        result = format_daily_risk_section(
+            CurrentDayRiskAssessment(
+                SUMMARY_DATE,
+                (RiskSignal("strong_wind", "technical reason"),),
+            ),
+            manual_only,
+        )
+        self.assertEqual(result, "Риски сегодня:\n• сильный ветер")
+
+    def test_risk_section_is_deterministic(self) -> None:
+        assessment = CurrentDayRiskAssessment(
+            SUMMARY_DATE,
+            (
+                RiskSignal("storm", "technical reason"),
+                RiskSignal("magnetic_storm", "technical reason"),
+                RiskSignal("heat", "technical reason"),
+            ),
+        )
+        first = format_daily_risk_section(assessment, settings())
+        second = format_daily_risk_section(assessment, settings())
+        self.assertEqual(first, second)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from types import MappingProxyType
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from weather_alert_bot.geomagnetic_forecast import GeomagneticForecast
@@ -76,6 +77,32 @@ _MONTH_NAMES = (
     "декабря",
 )
 
+# Explicit immutable mapping: detector category -> persisted user preference
+# -> concise Russian label.  In particular, detector ``ice`` maps to the
+# historical settings column ``warning_icing_enabled``.
+DAILY_RISK_CATEGORY_MAPPING: tuple[tuple[str, str, str], ...] = (
+    ("magnetic_storm", "warning_magnetic_storm_enabled", "сильная магнитная буря"),
+    ("heat", "warning_heat_enabled", "сильная жара"),
+    ("cold", "warning_cold_enabled", "сильный холод"),
+    ("ice", "warning_icing_enabled", "сильный гололёд/обледенение"),
+    ("heavy_rain", "warning_heavy_rain_enabled", "сильный дождь"),
+    ("thunderstorm", "warning_thunderstorm_enabled", "сильная гроза"),
+    ("strong_wind", "warning_strong_wind_enabled", "сильный ветер"),
+    ("storm", "warning_storm_enabled", "шторм"),
+)
+_DAILY_RISK_CATEGORY_BY_NAME = MappingProxyType(
+    {
+        category: (setting_field, display_name)
+        for category, setting_field, display_name in DAILY_RISK_CATEGORY_MAPPING
+    }
+)
+_CLIMATE_UNSUPPORTED_DISPLAY_NAMES = MappingProxyType(
+    {
+        "heat": "сильная жара",
+        "cold": "сильный холод",
+    }
+)
+
 
 def build_daily_summary(
     settings: UserSettings,
@@ -134,10 +161,56 @@ def build_daily_summary(
     )
 
 
-def format_daily_summary(summary: DailySummary) -> str:
+def format_daily_risk_section(
+    assessment: object,
+    settings: UserSettings,
+) -> str:
+    """Format a concise, preference-filtered risk block for user summaries."""
+    from weather_alert_bot.risk_assessment import CurrentDayRiskAssessment
+
+    if not isinstance(assessment, CurrentDayRiskAssessment):
+        raise DailySummaryError("Некорректная оценка рисков текущего дня.")
+    if not isinstance(settings, UserSettings):
+        raise DailySummaryError("Некорректные настройки пользователя для рисков.")
+
+    visible_names: list[str] = []
+    for signal in assessment.signals:
+        mapped = _DAILY_RISK_CATEGORY_BY_NAME.get(signal.category)
+        if mapped is None:
+            raise DailySummaryError("Оценка рисков содержит неизвестную категорию.")
+        setting_field, display_name = mapped
+        if getattr(settings, setting_field) is True:
+            visible_names.append(display_name)
+
+    if visible_names:
+        lines = ["Риски сегодня:"]
+        lines.extend(f"• {display_name}" for display_name in visible_names)
+    else:
+        lines = ["Риски сегодня: значимых по включённым категориям не выявлено."]
+
+    unavailable_names = [
+        _CLIMATE_UNSUPPORTED_DISPLAY_NAMES[category]
+        for category in ("heat", "cold")
+        if category in assessment.unsupported_categories
+        and getattr(settings, _DAILY_RISK_CATEGORY_BY_NAME[category][0]) is True
+    ]
+    if unavailable_names:
+        lines.append(f"Временно не оценены: {', '.join(unavailable_names)}.")
+    return "\n".join(lines)
+
+
+def format_daily_summary(
+    summary: DailySummary,
+    *,
+    risk_section: str | None = None,
+) -> str:
     """Format a stable Russian user-facing daily summary."""
     if not isinstance(summary, DailySummary):
         raise DailySummaryError("Некорректная модель ежедневной сводки.")
+    if risk_section is not None and (
+        not isinstance(risk_section, str) or not risk_section.strip()
+    ):
+        raise DailySummaryError("Блок рисков имеет недопустимый формат.")
 
     if summary.precipitation_time is None:
         precipitation_line = "Осадки: не ожидаются"
@@ -147,30 +220,30 @@ def format_daily_summary(summary: DailySummary) -> str:
             f"наиболее вероятно около {summary.precipitation_time:%H:%M}"
         )
 
-    return "\n".join(
-        (
-            f"📍 {summary.city_name}",
-            f"📅 {summary.date.day} {_MONTH_NAMES[summary.date.month - 1]} {summary.date.year}",
-            "",
-            f"Погода: {summary.weather_description}",
-            "Температура: "
-            f"{_format_temperature(summary.temperature_min)}…"
-            f"{_format_temperature(summary.temperature_max)} °C",
-            f"Утром: {_format_temperature(summary.morning_temperature)} °C",
-            f"Днём: {_format_temperature(summary.daytime_temperature)} °C",
-            "",
-            precipitation_line,
-            f"За сутки: {_format_number(summary.precipitation_sum)} мм",
-            "",
-            f"Ветер: до {_format_number(summary.wind_speed_max)} км/ч",
-            f"Порывы: до {_format_number(summary.wind_gusts_max)} км/ч",
-            "",
-            "Магнитная активность: "
-            f"Kp до {_format_number(summary.kp_max_24h)} в ближайшие 24 ч",
-            "",
-            f"Сводка сформирована: {summary.formed_at:%d.%m.%Y %H:%M}",
-        )
-    )
+    lines = [
+        f"📍 {summary.city_name}",
+        f"📅 {summary.date.day} {_MONTH_NAMES[summary.date.month - 1]} {summary.date.year}",
+        "",
+        f"Погода: {summary.weather_description}",
+        "Температура: "
+        f"{_format_temperature(summary.temperature_min)}…"
+        f"{_format_temperature(summary.temperature_max)} °C",
+        f"Утром: {_format_temperature(summary.morning_temperature)} °C",
+        f"Днём: {_format_temperature(summary.daytime_temperature)} °C",
+        "",
+        precipitation_line,
+        f"За сутки: {_format_number(summary.precipitation_sum)} мм",
+        "",
+        f"Ветер: до {_format_number(summary.wind_speed_max)} км/ч",
+        f"Порывы: до {_format_number(summary.wind_gusts_max)} км/ч",
+        "",
+        "Магнитная активность: "
+        f"Kp до {_format_number(summary.kp_max_24h)} в ближайшие 24 ч",
+    ]
+    if risk_section is not None:
+        lines.extend(("", risk_section))
+    lines.extend(("", f"Сводка сформирована: {summary.formed_at:%d.%m.%Y %H:%M}"))
+    return "\n".join(lines)
 
 
 def _is_aware(value: datetime) -> bool:

@@ -3,15 +3,28 @@ from __future__ import annotations
 from datetime import datetime
 import sys
 
+from weather_alert_bot.climate_cache import (
+    ClimateCacheError,
+    SQLiteClimateNormalsCache,
+    get_or_create_climate_normals,
+)
+from weather_alert_bot.climate_normals import (
+    ClimateNormalsError,
+    OpenMeteoHistoricalWeatherClient,
+    get_climate_normal_for_date,
+    local_calendar_date,
+)
 from weather_alert_bot.daily_summary import (
     DailySummaryError,
     build_daily_summary,
+    format_daily_risk_section,
     format_daily_summary,
 )
 from weather_alert_bot.geomagnetic_forecast import (
     GeomagneticForecastError,
     NoaaSwpcGeomagneticClient,
 )
+from weather_alert_bot.risk_assessment import RiskAssessmentError, assess_current_day_risks
 from weather_alert_bot.start_handler import _next_offset
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError, UserSettings
 from weather_alert_bot.telegram_api import TelegramApiError, TelegramClient, TelegramUpdate
@@ -26,6 +39,9 @@ ONBOARDING_REQUIRED_TEXT = "Сначала завершите первонача
 SUMMARY_ERROR_TEXT = "Не удалось сформировать сводку. Попробуйте позже."
 STORAGE_ERROR_TEXT = "Ошибка чтения сохранённых настроек города."
 NO_SAVED_OWNER_TEXT = "Сохранённый владелец не найден."
+CLIMATE_FALLBACK_DIAGNOSTIC = (
+    "Климатическая норма недоступна; жара и холод временно не оценены."
+)
 
 
 def _send_safe_message(
@@ -46,6 +62,8 @@ def _handle_today(
     owner: UserSettings,
     weather_client: OpenMeteoWeatherClient,
     geomagnetic_client: NoaaSwpcGeomagneticClient,
+    climate_cache: SQLiteClimateNormalsCache,
+    historical_client: OpenMeteoHistoricalWeatherClient,
     formed_at: datetime,
 ) -> int:
     if not owner.onboarding_completed:
@@ -69,8 +87,37 @@ def _handle_today(
             geomagnetic,
             formed_at,
         )
-        text = format_daily_summary(summary)
-    except (WeatherForecastError, GeomagneticForecastError, DailySummaryError):
+
+        climate_normal = None
+        try:
+            normals = get_or_create_climate_normals(
+                climate_cache,
+                historical_client,
+                owner.latitude,
+                owner.longitude,
+                owner.timezone,
+                formed_at,
+            )
+            target_date = local_calendar_date(formed_at, owner.timezone)
+            climate_normal = get_climate_normal_for_date(normals, target_date)
+        except (ClimateCacheError, ClimateNormalsError):
+            print(CLIMATE_FALLBACK_DIAGNOSTIC, file=sys.stderr)
+
+        assessment = assess_current_day_risks(
+            weather,
+            geomagnetic,
+            owner.timezone,
+            formed_at,
+            climate_normal=climate_normal,
+        )
+        risk_section = format_daily_risk_section(assessment, owner)
+        text = format_daily_summary(summary, risk_section=risk_section)
+    except (
+        WeatherForecastError,
+        GeomagneticForecastError,
+        DailySummaryError,
+        RiskAssessmentError,
+    ):
         print("Не удалось сформировать сводку.", file=sys.stderr)
         _send_safe_message(
             telegram_client,
@@ -90,6 +137,8 @@ def run_until_today(
     storage: SQLiteSettingsStore,
     weather_client: OpenMeteoWeatherClient,
     geomagnetic_client: NoaaSwpcGeomagneticClient,
+    climate_cache: SQLiteClimateNormalsCache,
+    historical_client: OpenMeteoHistoricalWeatherClient,
     formed_at: datetime,
 ) -> int:
     """Wait for one new private owner /today, send one summary, and finish."""
@@ -143,6 +192,8 @@ def run_until_today(
                     owner,
                     weather_client,
                     geomagnetic_client,
+                    climate_cache,
+                    historical_client,
                     formed_at,
                 )
     except TelegramApiError:

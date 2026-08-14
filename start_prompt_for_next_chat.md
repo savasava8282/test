@@ -689,3 +689,69 @@ Baseline перед implementation был `b03199ad14e56bbfe26f796f5a358b59bb82a
 Full suite после implementation: **405 tests OK**; `compileall` и `git diff --check` успешны. Все HTTP tests fake/mock. Codex implementation task real API/Telegram requests не выполняла. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit/push не делать.
 
 Следующий production stage выбирается техническим лидером отдельно. Ближайший stage — интеграция существующего all-eight current-day risk assessment в daily summary `/today` с использованием climate cache. В этой задаче не реализовывать `/today`, daily summary risk formatting, custom heat/cold thresholds, scheduler, event persistence/lifecycle, dedup, notification delivery, NOAA watches/warnings/alerts, permanent polling или systemd.
+
+## Текущая точка после реализации `/today` risk integration
+
+Baseline перед этим production stage: `cff6720f8464975cb2ed6f709ccce316bda1662a`. Реализация и tests находятся в рабочем дереве; commit и push не выполнялись.
+
+Готово:
+
+- one-shot private owner `/today` после valid command получает Weather Forecast и NOAA Kp ровно по одному разу;
+- те же parsed `WeatherForecast` и `GeomagneticForecast` используются существующим DailySummary builder и существующим `assess_current_day_risks(...)`;
+- handler через dependency injection получает read-only settings store, writable `SQLiteClimateNormalsCache(settings.climate_db_path)` и Historical client;
+- cache hit не обращается к Historical API, cache miss делает максимум один Historical request и сохраняет calculated 366-day snapshot;
+- текущий local date и `ClimateNormalDay` выбираются существующими `local_calendar_date(...)` и `get_climate_normal_for_date(...)`; с normal detector работает all-eight mode;
+- отдельный `format_daily_risk_section(...)` добавляет короткий user-facing блок перед временем формирования. Technical reasons и diagnostic `format_current_day_risk_assessment(...)` в Telegram не попадают;
+- risk signals фильтруются явным immutable mapping в detector order, включая специальное `ice -> warning_icing_enabled`. `urgent_warnings_enabled` и `daily_sending_enabled` manual `/today` не запрещают;
+- climate-only failure печатает стабильный stderr diagnostic `Климатическая норма недоступна; жара и холод временно не оценены.`, выполняет six-category fallback и показывает note только для включённых heat/cold. RiskAssessmentError остаётся общим safe failure.
+
+Автоматическая проверка после implementation: **418 tests OK**; HTTP и Telegram tests fake/mock, climate/settings tests temporary SQLite. `compileall` и `git diff --check` должны быть проверены перед handoff. `technical_spec.md` не изменять; `next_steps.md` не создавать.
+
+Controlled real Telegram/API test нового `/today` risk block завершён 14.08.2026; актуальная фиксация приведена ниже. Не начинать scheduler, scheduled sending, permanent polling, systemd, event persistence/lifecycle, dedup, notification delivery, NOAA alerts или custom thresholds автоматически.
+
+## Актуальная точка для следующего чата: `/today` all-eight production stage закрыт
+
+Baseline перед implementation: `cff6720f8464975cb2ed6f709ccce316bda1662a`. Реализация и tests уже выполнены; этот stage завершён controlled real Telegram cache-hit validation. Следующий архитектурный этап выбирается техническим лидером отдельно.
+
+Production `/today` читает saved `UserSettings`, использует Open-Meteo Weather Forecast, NOAA SWPC Kp forecast, отдельный writable climate SQLite cache, существующий `assess_current_day_risks(...)` и DailySummary. Weather и NOAA reuse между summary и detector исключает повторные fetch. Settings SQLite read-only; climate SQLite отдельная. Cache hit не требует Historical API; miss использует Historical `1991–2020` → ClimateNormals → atomic save → current local `ClimateNormalDay` → all-eight detector.
+
+All-eight categories: `magnetic_storm`, `heat`, `cold`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`. Risk block фильтруется per-category; `ice -> warning_icing_enabled` — явное mapping, без утверждения о переименовании storage category. `urgent_warnings_enabled` и `daily_sending_enabled` manual `/today` не блокируют. Обычная сводка показывает concise block без длинных `RiskSignal.reason`; diagnostic details остаются в `--preview-current-risks`. При climate-only failure сохраняется six-category mode и сообщается о временно неоценённых включённых heat/cold; `RiskAssessmentError` не маскируется fallback.
+
+### Controlled real test — 14.08.2026
+
+Через `--wait-for-today` получена новая приватная `/today`. Guard блокировал DNS только для `archive-api.open-meteo.com`; Forecast, NOAA и Telegram paths не блокировались. Terminal output:
+
+```text
+Ожидание новой команды /today...
+Команда /today получена.
+Сводка /today отправлена.
+HISTORICAL_DNS_ATTEMPTS=0
+```
+
+Реальное сообщение:
+
+```text
+📍 Москва
+📅 14 августа 2026
+
+Погода: пасмурно
+Температура: +8.7…+17.8 °C
+Утром: +12.7 °C
+Днём: +17.8 °C
+
+Осадки: до 5%, наиболее вероятно около 17:00
+За сутки: 0 мм
+
+Ветер: до 19.1 км/ч
+Порывы: до 51.8 км/ч
+
+Магнитная активность: Kp до 3.67 в ближайшие 24 ч
+
+Риски сегодня: значимых по включённым категориям не выявлено.
+
+Сводка сформирована: 14.08.2026 10:40
+```
+
+Подтверждены private `/today`, owner-only handler, Weather + NOAA summary, concise risk block, climate cache hit, all-eight path, Telegram send и штатное завершение one-shot process. Positive real hazard case не утверждать: фактически значимых risks не выявлено, positive cases остаются в automated coverage. До/после settings SQLite SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; byte-for-byte unchanged. Climate cache существовал до теста. После implementation: **418 tests OK**; compileall и `git diff --check` успешны.
+
+Stop-point закрыт. Не выбирать самостоятельно следующий этап. Всё ещё не реализованы scheduled daily sender, scheduler, event persistence/lifecycle, five-day warning detection, dedup, preliminary/update/start/end workflow, urgent warning delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds, user magnetic threshold, permanent polling и systemd. `technical_spec.md` unchanged; `next_steps.md` отсутствует; commit/push не делать.

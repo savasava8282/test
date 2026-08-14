@@ -651,14 +651,18 @@ def _wait_for_today() -> int:
         storage = SQLiteSettingsStore(settings.db_path, read_only=True)
         weather_client = OpenMeteoWeatherClient()
         geomagnetic_client = NoaaSwpcGeomagneticClient()
+        climate_cache = SQLiteClimateNormalsCache(settings.climate_db_path)
+        historical_client = OpenMeteoHistoricalWeatherClient()
         return run_until_today(
             telegram_client,
             storage,
             weather_client,
             geomagnetic_client,
+            climate_cache,
+            historical_client,
             datetime.now(timezone.utc),
         )
-    except (ConfigError, StorageError, TelegramApiError):
+    except (ConfigError, StorageError, TelegramApiError, ClimateCacheError):
         print("Ошибка обработки команды /today.", file=sys.stderr)
         return 1
 

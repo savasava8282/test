@@ -736,3 +736,55 @@ Production path: cache hit использует normals без Historical API; m
 До запуска settings SQLite имела SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, climate cache отсутствовал (`CLIMATE_CACHE_ABSENT`). Первый `PYTHONPATH=src python3 -m weather_alert_bot --preview-current-risks` вывел `Дата: 13.08.2026` и `значимых не выявлено.`, прошёл cache miss и создал `climate_normal_sets: 1`, `climate_normal_days: 366`. Повторный запуск с DNS guard только для `archive-api.open-meteo.com` вывел тот же результат и `HISTORICAL_DNS_ATTEMPTS=0`, доказав cache hit; Forecast/NOAA при этом оставались live requests и не утверждаются как cached. Оба запуска дали negative result, positive real hazard case не подтверждён.
 
 После miss → hit SHA settings SQLite остался тем же byte-for-byte. Отдельный climate cache был ожидаемо создан и записан. Текущий stop-point закрыт; следующий production stage выбирает технический лидер отдельно, наиболее непосредственный — интегрировать существующий all-eight current-day assessment в `/today` daily summary с climate cache. В этой задаче не реализовывать `/today`, risk formatting, custom thresholds, scheduler, event lifecycle, dedup, notifications, NOAA alerts, permanent polling или systemd. `technical_spec.md` не изменён; `next_steps.md` не создавать; commit/push не выполнять.
+
+## Реализованный production stage: `/today` использует climate cache и all-eight risks
+
+Baseline stage: `cff6720f8464975cb2ed6f709ccce316bda1662a`. Реализована интеграция существующего one-shot owner-only `/today` с текущим detector и climate persistence.
+
+- Flow: saved owner settings → один Weather Forecast request и один NOAA Kp request → `get_or_create_climate_normals(...)` через writable `settings.climate_db_path` → local-date lookup через существующие climate helpers → `assess_current_day_risks(...)` → existing DailySummary + concise risk block → один Telegram message.
+- Weather и NOAA parsed objects не загружаются повторно для risk assessment. `formed_at` один и тот же для summary, local date, detector и cache snapshot generation on miss.
+- Settings SQLite открывается read-only; climate SQLite отдельная и writable только для cache persistence. Cache hit не вызывает Historical, cache miss вызывает Historical максимум один раз и сохраняет snapshot.
+- Добавлен deterministic user-facing formatter: все восемь категорий идут в detector order, сигналы фильтруются per-category settings. Explicit mapping сохраняет особое соответствие `ice -> warning_icing_enabled`; `urgent_warnings_enabled` и `daily_sending_enabled` manual `/today` не блокируют.
+- Diagnostic `format_current_day_risk_assessment(...)` и длинные `RiskSignal.reason` в Telegram не используются. Existing weather/Kp fields и sampling rules не изменены; risk block добавляется перед `Сводка сформирована`.
+- При climate-only failure `/today` печатает stable stderr diagnostic, выполняет six-category fallback и явно сообщает только про включённые временно не оценённые heat/cold. `RiskAssessmentError`, Weather error и NOAA error используют общий safe failure path.
+
+Автоматическая проверка: **418 tests OK**; real API/Telegram requests в implementation task не выполнялись. Controlled real Telegram validation нового `/today` risk block завершена отдельным ручным cache-hit тестом 14.08.2026; следующий production stage не выбирать самостоятельно. Не начинать scheduler, scheduled sending, permanent polling, systemd, event persistence/lifecycle, dedup, notification delivery, NOAA watches/warnings/alerts, user custom thresholds или новые onboarding steps. `technical_spec.md` не изменять; `next_steps.md` не создавать; commit/push не выполнять.
+
+## Stop-point закрыт: controlled real Telegram `/today` cache-hit — 14.08.2026
+
+Через `--wait-for-today` вручную проверена новая приватная owner-only команда `/today`. DNS guard блокировал только `archive-api.open-meteo.com`; Forecast, NOAA и Telegram paths оставались доступными. Terminal output:
+
+```text
+Ожидание новой команды /today...
+Команда /today получена.
+Сводка /today отправлена.
+HISTORICAL_DNS_ATTEMPTS=0
+```
+
+Это подтверждает cache hit без Historical API. Weather и NOAA не называются cached: это live sources. Реальное сообщение Telegram было:
+
+```text
+📍 Москва
+📅 14 августа 2026
+
+Погода: пасмурно
+Температура: +8.7…+17.8 °C
+Утром: +12.7 °C
+Днём: +17.8 °C
+
+Осадки: до 5%, наиболее вероятно около 17:00
+За сутки: 0 мм
+
+Ветер: до 19.1 км/ч
+Порывы: до 51.8 км/ч
+
+Магнитная активность: Kp до 3.67 в ближайшие 24 ч
+
+Риски сегодня: значимых по включённым категориям не выявлено.
+
+Сводка сформирована: 14.08.2026 10:40
+```
+
+Подтверждены получение новой приватной команды, owner-only handler, Weather + NOAA summary, concise risk block, climate normal через cache, all-eight path, Telegram send и штатное завершение one-shot процесса. Значимых risks фактически не выявлено; positive real hazard case не утверждается. До/после settings SQLite SHA-256: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte unchanged; climate cache существовал до теста. После implementation: **418 tests OK**, compileall и `git diff --check` успешны.
+
+Текущий stop-point закрыт. Следующий архитектурный этап выбирается техническим лидером отдельно. Не реализованы scheduled daily sender, scheduler, event persistence/lifecycle, five-day warnings, dedup, preliminary/update/start/end workflow, urgent delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds, user magnetic threshold, permanent polling и systemd. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit/push не выполнять.

@@ -730,6 +730,21 @@ Full suite: **386 tests OK**. Scheduler, event storage, dedup/lifecycle, notific
 
 `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
 
+## Текущий production stage: `/today` с all-eight risk assessment и climate cache
+
+Baseline перед implementation этого stage: `cff6720f8464975cb2ed6f709ccce316bda1662a`; рабочее дерево на старте было чистым. One-shot owner-only `/today` теперь использует уже существующие Weather Forecast, NOAA Kp, DailySummary, `assess_current_day_risks(...)` и отдельный climate cache без создания второго detector.
+
+- После valid private `/today` владельца Weather и NOAA запрашиваются по одному разу. Те же parsed `WeatherForecast` и `GeomagneticForecast` передаются и в `build_daily_summary(...)`, и в `assess_current_day_risks(...)`; `formed_at` остаётся одним explicit aware datetime для summary, local-date lookup, detector и cache miss `generated_at`.
+- CLI wiring передаёт в handler `SQLiteSettingsStore(settings.db_path, read_only=True)`, writable `SQLiteClimateNormalsCache(settings.climate_db_path)` и `OpenMeteoHistoricalWeatherClient`. Climate data в `settings.sqlite3` не добавлялись; `WEATHER_ALERT_BOT_CLIMATE_DB_PATH` используется через существующий `Settings.climate_db_path`.
+- `/today` использует `get_or_create_climate_normals(...)`: cache hit не вызывает Historical API; cache miss выполняет максимум один Historical request, рассчитывает normals и атомарно сохраняет snapshot. Текущий local calendar day выбирается через существующие `local_calendar_date(...)` и `get_climate_normal_for_date(...)`, затем normal передаётся в existing detector, поэтому normal path работает в all-eight mode.
+- Добавлен pure `format_daily_risk_section(...)` и composition через `format_daily_summary(..., risk_section=...)`. User-facing block короткий и не использует `RiskSignal.reason` или diagnostic `format_current_day_risk_assessment(...)`. Сигналы сохраняют detector order и фильтруются явным immutable mapping; `ice` сопоставлен именно с `warning_icing_enabled`.
+- Вручную `/today` не блокируют `urgent_warnings_enabled` и `daily_sending_enabled`. Отключённые warning categories скрываются только из специального risk block; обычные weather/Kp строки сохраняются.
+- При `ClimateCacheError`, `ClimateNormalsError` или Historical failure на cache miss печатается стабильный stderr diagnostic `Климатическая норма недоступна; жара и холод временно не оценены.`, затем выполняется six-category detector без climate normal и отправляется погодная summary. User-facing note упоминает только включённые `heat`/`cold`; raw provider details и traceback не показываются. `RiskAssessmentError` остаётся общим safe failure path.
+
+Автоматическая проверка после implementation: **418 tests OK**. Новые tests покрывают `/today` cache hit/miss, отсутствие Historical на hit, один Weather/NOAA fetch, reuse тех же parsed objects, current local date, all-eight mode, все display names и detector order, explicit `ice -> warning_icing_enabled`, все category filters, независимость urgent/daily-sending settings, climate fallback, safe errors и configured separate climate path. Все HTTP/Telegram tests используют fake/mock и temporary SQLite.
+
+Controlled real Telegram/API validation нового risk block завершена 14.08.2026; подробности зафиксированы в следующей актуальной записи. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
 ## Актуальная точка: climate cache/persistence и controlled real validation завершены
 
 Реализован production-oriented persistence layer `src/weather_alert_bot/climate_cache.py` для уже рассчитанных ClimateNormals 1991–2020.
@@ -782,3 +797,58 @@ Full suite после implementation: **405 tests OK**. `compileall` успеш�
 Текущий stop-point: climate cache/persistence implementation и controlled real cache miss → cache hit validation завершены. Следующий production stage выбирает технический лидер отдельно; ближайший stage — отдельная интеграция существующего all-eight current-day risk assessment в daily summary `/today` с использованием climate cache. В рамках этой задачи `/today`, daily summary risk formatting, custom heat/cold thresholds, scheduler, event persistence/lifecycle, dedup, notification delivery, NOAA watches/warnings/alerts, permanent polling и systemd не реализовывались.
 
 `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.
+
+## Актуальная точка: production `/today` all-eight risk assessment закрыт
+
+Документационное закрытие production stage выполнено. Baseline перед implementation stage: `cff6720f8464975cb2ed6f709ccce316bda1662a`. Реализация и tests уже были выполнены до этой записи; текущая задача фиксирует только результат controlled real validation.
+
+Production one-shot private owner `/today` использует saved `UserSettings`, Open-Meteo Weather Forecast, NOAA SWPC Kp forecast, отдельный writable climate-normals SQLite cache, существующие `assess_current_day_risks(...)` и DailySummary. Weather и NOAA parsed data переиспользуются между DailySummary и detector; повторных Weather/NOAA fetch ради risk assessment нет. Settings SQLite открывается read-only и остаётся отдельной от writable climate SQLite.
+
+При climate-cache hit Historical API не вызывается. При miss используется существующий flow: Historical `1991–2020` → расчёт `ClimateNormals` → atomic cache save → `ClimateNormalDay` текущей local date → all-eight detector. При наличии climate normal оцениваются в detector order: `magnetic_storm`, `heat`, `cold`, `ice`, `heavy_rain`, `thunderstorm`, `strong_wind`, `storm`. Risk block фильтруется по per-category warning settings; особое mapping зафиксировано как `ice -> warning_icing_enabled`, без утверждения о переименовании storage category. `urgent_warnings_enabled` и `daily_sending_enabled` manual `/today` не блокируют.
+
+Обычная `/today` показывает concise risk block и не выводит длинные `RiskSignal.reason`; diagnostic formatter остаётся только в `--preview-current-risks`. При недоступной climate stage `/today` безопасно продолжает работу в backward-compatible six-category mode и сообщает о временно неоценённых включённых heat/cold; heat/cold не трактуются как «риска нет». Climate-only failure не уничтожает всю weather summary, а `RiskAssessmentError` и другие небезопасные ошибки detector не маскируются под climate fallback.
+
+### Controlled real `/today` cache-hit validation — 14.08.2026
+
+Real one-shot Telegram test выполнен вручную через `--wait-for-today`. Test guard блокировал DNS resolution только для `archive-api.open-meteo.com`; Forecast, NOAA и Telegram network paths не блокировались. После запуска CLI вывел:
+
+```text
+Ожидание новой команды /today...
+Команда /today получена.
+Сводка /today отправлена.
+HISTORICAL_DNS_ATTEMPTS=0
+```
+
+`HISTORICAL_DNS_ATTEMPTS=0` — controlled proof, что существующий climate-cache hit не вызвал Historical API. Weather и NOAA остаются live data sources; их cached status не утверждается.
+
+Фактическое Telegram-сообщение:
+
+```text
+📍 Москва
+📅 14 августа 2026
+
+Погода: пасмурно
+Температура: +8.7…+17.8 °C
+Утром: +12.7 °C
+Днём: +17.8 °C
+
+Осадки: до 5%, наиболее вероятно около 17:00
+За сутки: 0 мм
+
+Ветер: до 19.1 км/ч
+Порывы: до 51.8 км/ч
+
+Магнитная активность: Kp до 3.67 в ближайшие 24 ч
+
+Риски сегодня: значимых по включённым категориям не выявлено.
+
+Сводка сформирована: 14.08.2026 10:40
+```
+
+Тест подтвердил получение новой приватной `/today`, owner-only handler, Weather + NOAA summary, новый user-facing risk block, доступность climate normal через cache, завершение all-eight path, Telegram send и штатное завершение one-shot процесса. Positive real hazard case не подтверждён: фактически значимых risks не выявлено; positive detector cases остаются automated-test coverage.
+
+До и после запуска production settings SQLite имела SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; `settings.sqlite3` осталась byte-for-byte неизменной. Climate cache существовал до теста и использовался как cache hit. Токен был загружен на сервере из существующего env-файла вне Git и в вывод не попал.
+
+После implementation: **418 tests OK**. `compileall` и `git diff --check` успешно завершены; real network/Telegram requests в implementation task не выполнялись, описанный real test был отдельной ручной controlled validation.
+
+Текущий stop-point закрыт. Следующий архитектурный этап отдельно выбирает технический лидер; его самостоятельно не выбирать и не реализовывать. Ещё не реализованы scheduled daily sender, scheduler, event persistence/lifecycle, five-day warning detection, dedup, preliminary/update/start/end workflow, urgent delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds, user magnetic threshold, permanent polling и systemd. `technical_spec.md` не изменён; `next_steps.md` отсутствует; commit и push не выполнялись.

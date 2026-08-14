@@ -33,6 +33,7 @@ class TodayCliTest(unittest.TestCase):
         settings = SimpleNamespace(
             telegram_bot_token=TEST_TOKEN,
             db_path=Path("/tmp/test-today-settings.sqlite3"),
+            climate_db_path=Path("/tmp/test-today-climate.sqlite3"),
         )
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": TEST_TOKEN}, clear=True):
             with patch("weather_alert_bot.app.load_settings", return_value=settings):
@@ -40,24 +41,30 @@ class TodayCliTest(unittest.TestCase):
                     with patch("weather_alert_bot.app.SQLiteSettingsStore") as storage_type:
                         with patch("weather_alert_bot.app.OpenMeteoWeatherClient") as weather_type:
                             with patch("weather_alert_bot.app.NoaaSwpcGeomagneticClient") as kp_type:
-                                with patch("weather_alert_bot.app.datetime") as datetime_type:
-                                    datetime_type.now.return_value = FIXED_NOW
-                                    with patch(
-                                        "weather_alert_bot.app.run_until_today",
-                                        return_value=0,
-                                    ) as handler:
-                                        result = main(["--wait-for-today"])
+                                with patch("weather_alert_bot.app.SQLiteClimateNormalsCache") as climate_type:
+                                    with patch("weather_alert_bot.app.OpenMeteoHistoricalWeatherClient") as historical_type:
+                                        with patch("weather_alert_bot.app.datetime") as datetime_type:
+                                            datetime_type.now.return_value = FIXED_NOW
+                                            with patch(
+                                                "weather_alert_bot.app.run_until_today",
+                                                return_value=0,
+                                            ) as handler:
+                                                result = main(["--wait-for-today"])
 
         self.assertEqual(result, 0)
         client_type.assert_called_once_with(TEST_TOKEN)
         storage_type.assert_called_once_with(settings.db_path, read_only=True)
         weather_type.assert_called_once_with()
         kp_type.assert_called_once_with()
+        climate_type.assert_called_once_with(settings.climate_db_path)
+        historical_type.assert_called_once_with()
         handler.assert_called_once_with(
             client_type.return_value,
             storage_type.return_value,
             weather_type.return_value,
             kp_type.return_value,
+            climate_type.return_value,
+            historical_type.return_value,
             FIXED_NOW,
         )
         self.assertIsNotNone(FIXED_NOW.tzinfo)
@@ -69,8 +76,9 @@ class TodayCliTest(unittest.TestCase):
                 "weather_alert_bot.app.run_until_today",
                 side_effect=StorageError("private SQLite path and details"),
             ):
-                with redirect_stdout(output), redirect_stderr(output):
-                    result = main(["--wait-for-today"])
+                with patch("weather_alert_bot.app.SQLiteClimateNormalsCache"):
+                    with redirect_stdout(output), redirect_stderr(output):
+                        result = main(["--wait-for-today"])
 
         self.assertEqual(result, 1)
         self.assertIn("Ошибка обработки команды /today", output.getvalue())
