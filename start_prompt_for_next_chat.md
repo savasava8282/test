@@ -791,3 +791,91 @@ Runtime DB после send: `daily_delivery_state` с одной row `(523061617
 Production settings SHA-256 до/после controlled tests одинаков: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; byte-for-byte unchanged. **454 tests OK**, compileall и `git diff --check` успешны. `technical_spec.md` unchanged, `next_steps.md` отсутствует, temporary DB и secrets/env в Git не добавлены, commit/push не делать. Codex real API/Telegram calls во время implementation не выполнял; real calls были только в отдельной ручной validation.
 
 Текущий stop-point: daily dispatch core реализован, автоматизированно протестирован и подтверждён controlled real send/cache hit/runtime persistence/duplicate suppression. Не реализовывать самостоятельно permanent once-per-minute scheduler, daemon, systemd, event persistence/lifecycle, five-day warnings, event dedup/lifecycle, preliminary/update/start/end notifications, urgent delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly thresholds, user magnetic threshold, `/settings` или `/help`. Не изменять Python/tests, `technical_spec.md`; `next_steps.md` не создавать.
+
+## Актуальная точка для следующего чата: permanent scheduler реализован
+
+Работать от baseline stage `f26ff381a31955da75d4bfc0c2354fe1ddc41563`. В `src/weather_alert_bot/scheduler.py` реализован permanent sequential foreground loop только для existing daily dispatch. Первый tick immediate; после tick используется ближайшая будущая UTC minute boundary от актуального clock value; fixed 60-second sleep, drift и catch-up отсутствуют. Каждый tick получает новый aware UTC `current_time` и перечитывает settings из existing read-only settings SQLite.
+
+Scheduler не реализует onboarding/daily-enabled/weekday/local HH:MM/local-date/already-sent checks, Weather/NOAA/report logic или runtime delivery state. Он вызывает existing `run_daily_dispatch_once`; not-due/already-sent не вызывают network dependencies. Recoverable tick failure даёт стабильную safe stderr diagnostic и переносится на следующую boundary без immediate retry. Stop через `threading.Event`, KeyboardInterrupt, SIGINT/SIGTERM; current synchronous tick может завершиться, новый tick после stop не начинается.
+
+CLI `--run-scheduler` требует token, использует `WEATHER_ALERT_BOT_DB_PATH`, `WEATHER_ALERT_BOT_CLIMATE_DB_PATH`, `WEATHER_ALERT_BOT_RUNTIME_DB_PATH`, остаётся foreground process и выводит стабильные `Планировщик запущен.` / `Планировщик остановлен.`. Сейчас зарегистрирован только daily-dispatch job; systemd/cron, Telegram polling, threads/processes и будущие warning/event jobs отсутствуют.
+
+Автоматически проверено: **470 tests OK**. `technical_spec.md` не изменён, `next_steps.md` отсутствует, implementation/tests real API или Telegram не вызывали. Controlled real foreground scheduler validation ещё НЕ выполнена. Следующий stop-point: ручной запуск с temporary settings/runtime paths, production climate cache, target minute, внешним timeout/signal и проверкой неизменности production settings DB. Не делать commit/push.
+
+## Финальный handoff: permanent foreground once-per-minute scheduler закрыт
+
+Выполнено только документационное закрытие уже реализованного stage от baseline `f26ff381a31955da75d4bfc0c2354fe1ddc41563`. Implementation уже находится в working tree: `src/weather_alert_bot/scheduler.py`, production CLI `--run-scheduler`, связанные Python/tests changes не изменять.
+
+Scheduler — обычный sequential/synchronous foreground process. Initial tick выполняется сразу; subsequent ticks выравниваются по ближайшей будущей UTC minute boundary. Fixed `sleep(60)`, accumulated drift, replay/catch-up пропущенных минут, parallel jobs, thread pool и asyncio отсутствуют. После каждого завершённого tick рассчитывается следующая future boundary. User-local timezone не используется timing layer напрямую: existing daily dispatch владеет local date/weekday/time due semantics.
+
+Каждый tick перечитывает settings; `Owner`/`UserSettings` не кешируются навечно при старте, settings SQLite read-only. Scheduler вызывает только existing one-shot daily dispatch и не дублирует onboarding/daily-sending checks, due decision, weekday/time checks, report composition, Weather/NOAA/climate/risk logic, Telegram delivery-state logic или runtime dedup. `not due` и `already sent` не вызывают Weather/NOAA/Historical/Telegram и не печатают обычные success diagnostics.
+
+Recoverable tick failure изолируется: safe diagnostic, ожидание следующей будущей minute boundary, затем следующий tick; immediate busy retry нет. Raw provider/token exceptions пользователю не выводятся, fatal startup/config dependency errors могут завершить process. Graceful stop поддерживает KeyboardInterrupt, SIGTERM и interruptible stop event/wait; при stop новый tick не начинается. Systemd/cron ещё НЕ реализованы.
+
+### Controlled real validation — 14.08.2026
+
+Использованы temporary paths:
+
+```text
+/tmp/weather-alert-scheduler-test/settings.sqlite3
+/tmp/weather-alert-scheduler-test/runtime.sqlite3
+```
+
+Production settings SQLite не редактировалась. Test owner timezone — `Europe/Moscow`; temporary settings были enabled и настроены на текущий ISO weekday с ближайшей target minute. Точную первоначальную target minute не фиксировать: её значение не сохранилось в финальном transcript.
+
+Первая попытка wrapper не запустила production scheduler из-за внешней shell syntax error:
+
+```text
+EXTERNAL_TIMEOUT_SECONDS=127
+timeout: failed to run command ‘PYTHONPATH=src’: No such file or directory
+TIMEOUT_EXIT_CODE=127
+```
+
+Это не scheduler failure; после исправления wrapper тест был запущен заново. Успешный run вывел `Планировщик запущен.`, самостоятельно дошёл до due minute и вывел `Ежедневная сводка отправлена по расписанию.`. Вручную Telegram-команды не отправлялись. Successful scheduled delivery сформирована `14.08.2026 16:17 Europe/Moscow` и прошла цепочку scheduler → due dispatch → reusable report → Weather → NOAA → climate cache → all-eight current-day risk path → Telegram.
+
+Сообщение было:
+
+```text
+📍 Москва
+📅 14 августа 2026
+
+Погода: пасмурно
+Температура: +8.7…+18.2 °C
+Утром: +12.7 °C
+Днём: +18.2 °C
+
+Осадки: до 3%, наиболее вероятно около 18:00
+За сутки: 0 мм
+
+Ветер: до 18.1 км/ч
+Порывы: до 49.3 км/ч
+
+Магнитная активность: Kp до 3.67 в ближайшие 24 ч
+
+Риски сегодня: значимых по включённым категориям не выявлено.
+
+Сводка сформирована: 14.08.2026 16:17
+```
+
+Historical DNS guard для `archive-api.open-meteo.com` дал `HISTORICAL_DNS_ATTEMPTS=0`, то есть scheduled report использовал existing climate cache hit. Weather, NOAA и Telegram network paths были real; не утверждать, что Weather/NOAA закэшированы. Positive real hazard case не возник. После первого scheduled report второго Telegram message не пришло — existing persistent local-date dedup, не distributed exactly-once.
+
+SIGTERM от внешнего GNU `timeout` был обработан graceful-stop diagnostic. Финальный output:
+
+```text
+Планировщик остановлен.
+HISTORICAL_DNS_ATTEMPTS=0
+TIMEOUT_EXIT_CODE=124
+```
+
+`124` ожидаем для GNU timeout, который инициировал остановку; kill-after как отдельный доказанный факт не утверждать. Temporary runtime SQLite содержала:
+
+```text
+(5230616172, '2026-08-14', '2026-08-14T13:17:00.000174+00:00')
+ROW_COUNT=1
+```
+
+Это ровно одна successful scheduled delivery row; `last_successful_local_date = 2026-08-14`, timestamp UTC, `13:17 UTC = 16:17 Europe/Moscow`. Production settings SQLite до/после всех действий имела SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte unchanged. Schedule modifications выполнялись только в temporary copy.
+
+Проверки после docs-only изменений выполнить и зафиксировать в отчёте: **470 tests OK**, `compileall`, `git diff --check`, полный `git status --short`. Также убедиться, что изменены только `current_status.md`, `module_map.md`, `roadmap.md`, `start_prompt_for_next_chat.md`; Python/tests implementation changes остались в точности как были; `technical_spec.md` unchanged; `next_steps.md` отсутствует; SQLite/temp/cache/runtime files и secrets/env не добавлены; новых network/API/Telegram calls не было; systemd/cron files не создавались; scheduler process не оставлен запущенным; commit/push не делать.
+
+Текущий stop-point: permanent foreground once-per-minute scheduler реализован, 470 automated tests пройдены, controlled-real-validated; подтверждены real scheduled Telegram delivery, отсутствие next-minute duplicate, runtime-state persistence, climate cache hit, graceful SIGTERM и production settings integrity. Systemd всё ещё НЕ реализован. Не выбирать и не реализовывать самостоятельно systemd, permanent Telegram command polling/router, `/settings`, `/help`, event persistence/lifecycle, five-day/hourly/active-hazard warning stages, preliminary/update/start/end/urgent notifications, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly thresholds или user magnetic threshold.

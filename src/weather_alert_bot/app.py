@@ -1,5 +1,7 @@
 import argparse
 from datetime import datetime, timezone
+from threading import Event
+import signal
 import sys
 from collections.abc import Sequence
 
@@ -48,6 +50,7 @@ from weather_alert_bot.risk_assessment import (
     format_current_day_risk_assessment,
 )
 from weather_alert_bot.runtime_state import RuntimeStateError, SQLiteRuntimeStateStore
+from weather_alert_bot.scheduler import run_scheduler_loop
 from weather_alert_bot.settings_summary_handler import run_until_settings_summary
 from weather_alert_bot.storage import SQLiteSettingsStore, StorageError
 from weather_alert_bot.start_handler import run_until_start
@@ -166,6 +169,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="однократно проверить расписание и отправить ежедневную сводку при необходимости",
     )
     telegram_group.add_argument(
+        "--run-scheduler",
+        action="store_true",
+        help="запустить постоянный foreground-планировщик ежедневной рассылки",
+    )
+    telegram_group.add_argument(
         "--geocode-city",
         metavar="CITY",
         help="однократно найти город через Open-Meteo",
@@ -212,6 +220,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _wait_for_today()
     if args.run_daily_dispatch_once:
         return _run_daily_dispatch_once()
+    if args.run_scheduler:
+        return _run_scheduler()
     if args.geocode_city is not None:
         return _geocode_city(args.geocode_city)
 
@@ -728,6 +738,56 @@ def _run_daily_dispatch_once() -> int:
         return 1
 
     _print_daily_dispatch_status(result.status)
+    return 0
+
+
+def _run_scheduler() -> int:
+    try:
+        settings = load_settings(require_telegram_token=True)
+        if settings.telegram_bot_token is None:
+            raise TelegramApiError("Токен Telegram не задан.")
+
+        telegram_client = TelegramClient(settings.telegram_bot_token)
+        settings_store = SQLiteSettingsStore(settings.db_path, read_only=True)
+        runtime_state = SQLiteRuntimeStateStore(settings.runtime_db_path)
+        weather_client = OpenMeteoWeatherClient()
+        geomagnetic_client = NoaaSwpcGeomagneticClient()
+        climate_cache = SQLiteClimateNormalsCache(settings.climate_db_path)
+        historical_client = OpenMeteoHistoricalWeatherClient()
+    except Exception:
+        print("Ошибка запуска планировщика.", file=sys.stderr)
+        return 1
+
+    stop_event = Event()
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_event.set()
+
+    previous_handlers: dict[int, object] = {}
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, request_stop)
+
+        print("Планировщик запущен.")
+        try:
+            run_scheduler_loop(
+                settings_store=settings_store,
+                runtime_state=runtime_state,
+                weather_client=weather_client,
+                geomagnetic_client=geomagnetic_client,
+                climate_cache=climate_cache,
+                historical_client=historical_client,
+                telegram_client=telegram_client,
+                stop_event=stop_event,
+            )
+        except KeyboardInterrupt:
+            stop_event.set()
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+    print("Планировщик остановлен.")
     return 0
 
 

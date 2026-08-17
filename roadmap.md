@@ -810,3 +810,23 @@ One-shot `daily_dispatch.py` проверяет onboarding, daily sending, ISO w
 Controlled send через temporary settings/runtime paths на `2026-08-14 15:08 Europe/Moscow` дал реальное scheduled Telegram message, Weather и NOAA requests и `HISTORICAL_DNS_ATTEMPTS=0` при специально заблокированном Historical hostname — доказан climate-cache hit. Второй invocation в `15:12` той же даты с DNS guard завершился `Ежедневная сводка за текущий день уже отправлена.` и `DNS_ATTEMPTS=0`; Weather, NOAA, Historical, report generation и Telegram path не запускались. Runtime state содержала ровно одну row для test owner. Production settings SQLite осталась byte-for-byte unchanged; SHA-256 до/после: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`.
 
 Stage закрыт: **454 tests OK**, compileall и `git diff --check` успешны. Real calls выполнялись только отдельной ручной controlled validation; secrets/env не добавлены, temporary DB не добавлены, `technical_spec.md` unchanged, `next_steps.md` отсутствует. Permanent once-per-minute scheduler, daemon, systemd и следующие event/warning/threshold/settings stages не выбирать и не реализовывать самостоятельно.
+
+## Production stage: permanent daily scheduler — реализован
+
+От baseline `f26ff381a31955da75d4bfc0c2354fe1ddc41563` добавлен обычный foreground scheduler process. Initial tick выполняется немедленно; subsequent ticks выровнены по следующей UTC minute boundary без fixed-sleep drift и без catch-up. Settings перечитываются на каждом tick, recoverable tick errors изолируются до следующей boundary, stop поддерживает KeyboardInterrupt/SIGINT/SIGTERM.
+
+Scheduler вызывает только existing one-shot daily dispatch. Другие scheduled jobs, permanent Telegram polling, event lifecycle, urgent monitoring и deployment integration не входят в stage. Automated suite: 470 tests OK; controlled real scheduler validation ещё не выполнена.
+
+Текущий stop-point: controlled real foreground scheduler test с temporary settings/runtime paths, existing production climate cache, target daily minute, внешним timeout/signal и проверкой settings DB. Systemd и cron остаются отдельными будущими этапами.
+
+## Финально закрытый production stage: permanent foreground once-per-minute scheduler — 14.08.2026
+
+Stage выполнен от baseline `f26ff381a31955da75d4bfc0c2354fe1ddc41563`. `src/weather_alert_bot/scheduler.py` и CLI `--run-scheduler` дают обычный foreground process: initial tick immediate, subsequent ticks по ближайшим будущим UTC minute boundaries, без fixed `sleep(60)`, accumulated drift и catch-up. Loop sequential/synchronous; settings перечитываются на каждом tick, settings SQLite read-only. Existing daily dispatch остаётся владельцем local timezone/date/weekday/time due logic, report, provider, risk, Telegram delivery и runtime dedup.
+
+Idle not-due/already-sent ticks не запускают Weather/NOAA/Historical/Telegram и не спамят success diagnostics. Recoverable tick failure изолируется до следующей future boundary; raw provider/token exceptions не выводятся. KeyboardInterrupt/SIGTERM и interruptible stop event поддержаны; при stop новый tick не начинается. Systemd/cron не реализованы.
+
+Controlled real foreground run 14.08.2026 использовал temporary settings/runtime SQLite, owner timezone `Europe/Moscow`, production climate cache и внешний GNU `timeout`. Первая wrapper ошибка с `timeout: failed to run command ‘PYTHONPATH=src’` и exit `127` не являлась scheduler failure; после исправления wrapper scheduler реально отправил production daily report в Telegram, сформированный `14.08.2026 16:17 Europe/Moscow`. Manual Telegram commands не отправлялись. DNS guard дал `HISTORICAL_DNS_ATTEMPTS=0`, подтверждая climate-cache hit; real Weather/NOAA/Telegram paths прошли, positive hazard case не возник.
+
+После успешной delivery второго Telegram message не было. Temporary runtime state содержала ровно одну успешную row с `last_successful_local_date = 2026-08-14` и UTC timestamp `2026-08-14T13:17:00.000174+00:00` (`13:17 UTC = 16:17 Europe/Moscow`). SIGTERM был обработан graceful-stop diagnostic `Планировщик остановлен.`; `TIMEOUT_EXIT_CODE=124` ожидаем для внешнего GNU timeout. Production settings SQLite сохранила SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte unchanged.
+
+Stage закрыт: **470 tests OK**, compileall и `git diff --check` успешны. `technical_spec.md` unchanged, `next_steps.md` отсутствует, temp SQLite/secrets/env не добавлены. Следующий этап не выбирать самостоятельно; systemd deployment/service и перечисленные event/warning/threshold/settings features остаются отдельными будущими этапами.
