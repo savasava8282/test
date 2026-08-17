@@ -1061,3 +1061,26 @@ Production settings SQLite до и после temporary DB creation, ошибо�
 После implementation: **470 tests OK**; `compileall` успешно; `git diff --check` успешно. Codex real network/API/Telegram calls не выполнял — controlled real calls выполнялись отдельно вручную. `technical_spec.md` unchanged, `next_steps.md` отсутствует, production/temp SQLite, cache/runtime files, secrets и env не добавлены в Git.
 
 Текущий stop-point: permanent foreground once-per-minute scheduler реализован, automated-tested и controlled-real-validated; real scheduled Telegram delivery, next-minute duplicate suppression, runtime persistence, climate-cache hit, graceful SIGTERM shutdown и production settings integrity подтверждены. Systemd всё ещё НЕ реализован. Вне реализации остаются systemd deployment/service, permanent Telegram command polling/router, `/settings`, `/help`, event persistence/lifecycle, five-day warning detection, hourly 24h warning detection, active-hazard monitoring, preliminary/update/start/end notifications, urgent warning delivery, NOAA watches/warnings/alerts, normalization-date calculations, custom seasonal/monthly heat/cold thresholds и user magnetic threshold. Следующий этап самостоятельно не выбирать и не реализовывать.
+
+## Production stage: systemd service/deployment artifact — полностью закрыт
+
+Эта запись относится к baseline `a39b478d89b65ad9045686c6f1a30495f663e5eb`. Systemd stage завершён: implementation, automated tests, static unit verification и controlled real deployment/revalidation выполнены. Permanent scheduler не переписывался: `deploy/systemd/weather-alert-bot.service` запускает существующий foreground CLI `--run-scheduler` как обычный process. Systemd является только внешним supervisor; application scheduler, daily dispatch, report, risk, provider, Telegram и graceful SIGTERM semantics остаются в существующих Python layers.
+
+Unit использует фактический source-checkout path без shell wrapper: `WorkingDirectory=/root/projects/test`, `EnvironmentFile=/root/.config/weather-alert-bot/env`, `Environment=PYTHONPATH=/root/projects/test/src`, `Environment=PYTHONUNBUFFERED=1` и `ExecStart=/usr/bin/python3 -m weather_alert_bot --run-scheduler`. Также подтверждены `Type=simple`, `Wants/After=network-online.target`, `Restart=on-failure`, `RestartSec=30s`, `KillSignal=SIGTERM`, `TimeoutStopSec=90s` и `WantedBy=multi-user.target`. Production env не печатается и не копируется в Git.
+
+Добавлен `tests/test_systemd_unit.py` с четырьмя статическими проверками unit: existence, launch path, source import path, working directory, external env, unbuffered output, restart/shutdown/network directives и отсутствие secrets/background/daemonization/cron. Полный suite: **474 tests OK** (`PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'`). `systemd-analyze verify deploy/systemd/weather-alert-bot.service` успешно проверил unit.
+
+### Controlled real systemd validation
+
+Unit реально установлен в `/etc/systemd/system/weather-alert-bot.service`; выполнены `daemon-reload`, enable/start, restart, explicit stop/start и reboot/autostart. Подтверждено:
+
+- initial enable/start: `is-enabled=enabled`, `is-active=active`, systemd запустил Python scheduler;
+- restart: PID изменился с `1522663` на `1522755`, service остался `active`, journal подтвердил `Планировщик остановлен.` и `Deactivated successfully`;
+- после добавления `PYTHONUNBUFFERED=1` обновлённый unit был установлен, перезагружен и перезапущен; новый PID `1524016`, journal сразу показал `Планировщик запущен.`;
+- explicit stop/start: после stop `inactive` и graceful-stop journal подтверждены, после start `active`, новый PID `1524122`, start diagnostic появился сразу;
+- reboot/autostart: после реального нового boot `is-enabled=enabled`, `is-active=active`, `Active: active (running)`, фактический process — `/usr/bin/python3 -m weather_alert_bot --run-scheduler`, boot PID `777`;
+- current-boot journal подтвердил `Started weather-alert-bot.service - Weather Alert Bot permanent foreground scheduler.` и `python3[777]: Планировщик запущен.`.
+
+Таким образом, полностью подтверждены implementation complete, automated tests complete, static unit verification complete, real install complete, enable/start complete, restart complete, graceful SIGTERM shutdown complete, explicit stop/start complete, unbuffered journald logging complete, reboot/autostart complete и current-boot active status. Эта validation не является утверждением distributed или exactly-once свойств; такие свойства этим stage не проверялись.
+
+`technical_spec.md` не изменён, `next_steps.md` не создавался. Следующий архитектурный этап самостоятельно не выбирается и не реализуется.

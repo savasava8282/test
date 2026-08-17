@@ -830,3 +830,13 @@ Controlled real foreground run 14.08.2026 использовал temporary setti
 После успешной delivery второго Telegram message не было. Temporary runtime state содержала ровно одну успешную row с `last_successful_local_date = 2026-08-14` и UTC timestamp `2026-08-14T13:17:00.000174+00:00` (`13:17 UTC = 16:17 Europe/Moscow`). SIGTERM был обработан graceful-stop diagnostic `Планировщик остановлен.`; `TIMEOUT_EXIT_CODE=124` ожидаем для внешнего GNU timeout. Production settings SQLite сохранила SHA-256 `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`, byte-for-byte unchanged.
 
 Stage закрыт: **470 tests OK**, compileall и `git diff --check` успешны. `technical_spec.md` unchanged, `next_steps.md` отсутствует, temp SQLite/secrets/env не добавлены. Следующий этап не выбирать самостоятельно; systemd deployment/service и перечисленные event/warning/threshold/settings features остаются отдельными будущими этапами.
+
+## Systemd service/deployment для permanent foreground scheduler — stage закрыт
+
+Добавлен version-controlled `deploy/systemd/weather-alert-bot.service`. Он использует `WorkingDirectory=/root/projects/test`, `Environment=PYTHONPATH=/root/projects/test/src`, `Environment=PYTHONUNBUFFERED=1`, внешний `EnvironmentFile=/root/.config/weather-alert-bot/env` и `ExecStart=/usr/bin/python3 -m weather_alert_bot --run-scheduler`. Unit остаётся foreground `Type=simple`, использует `network-online.target`, `Restart=on-failure` с задержкой 30 секунд, SIGTERM/graceful-stop timeout и `multi-user.target`; отдельного daemon/process-manager/cron слоя нет.
+
+Добавлены статические unit tests. Automated/static verification завершена: **474 tests OK**, `python3 -m compileall -q src`, `git diff --check` и `systemd-analyze verify deploy/systemd/weather-alert-bot.service` успешны.
+
+Controlled real validation полностью завершена: real install, daemon-reload, enable/start, restart с заменой PID и graceful SIGTERM, обновлённый unbuffered journald output, explicit stop/start, reboot/autostart и current-boot active status подтверждены. После boot service имел `is-enabled=enabled`, `is-active=active`, `Active: active (running)`, process `/usr/bin/python3 -m weather_alert_bot --run-scheduler`, а journal подтвердил `Started weather-alert-bot.service ...` и `Планировщик запущен.`. Systemd stage полностью закрыт. Это не утверждает distributed/exactly-once свойства, которые не проверялись.
+
+`technical_spec.md` не изменён, `next_steps.md` не создавался. Следующий архитектурный этап самостоятельно не выбирать и не реализовывать.

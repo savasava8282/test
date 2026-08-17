@@ -529,3 +529,14 @@ Controlled real run использовал `/tmp/weather-alert-scheduler-test/se
 Real chain Weather → NOAA → climate cache → all-eight current-day risk path → Telegram подтверждён. DNS guard для `archive-api.open-meteo.com` дал `HISTORICAL_DNS_ATTEMPTS=0`; Weather/NOAA/Telegram были real, cache-статус Weather/NOAA не утверждается. Следующего Telegram duplicate не было. Runtime DB содержала ровно одну row `(5230616172, '2026-08-14', '2026-08-14T13:17:00.000174+00:00')`, `ROW_COUNT=1`; UTC timestamp соответствует `16:17 Europe/Moscow`. GNU timeout передал SIGTERM, process вывел `Планировщик остановлен.`, итоговый `TIMEOUT_EXIT_CODE=124` ожидаем.
 
 Production settings SQLite SHA-256 до/после теста: `dd249d550da41f27c6d2081b8012eff7593964fb355425c4539e9a23fd077424`; byte-for-byte unchanged. Stage закрыт: **470 tests OK**, compileall и `git diff --check` успешны. `technical_spec.md` unchanged, `next_steps.md` отсутствует, temp SQLite/secrets/env не добавлены. Systemd/cron, Telegram polling/router и все будущие warning/event/threshold stages остаются вне реализации.
+
+## Systemd deployment stage — полностью закрыт
+
+- `deploy/systemd/weather-alert-bot.service` — version-controlled foreground unit. Он запускает существующий `/usr/bin/python3 -m weather_alert_bot --run-scheduler` из `/root/projects/test`, использует `PYTHONPATH=/root/projects/test/src`, `EnvironmentFile=/root/.config/weather-alert-bot/env`, `PYTHONUNBUFFERED=1`, network-online ordering, `Type=simple`, `Restart=on-failure` с `RestartSec=30s`, SIGTERM и graceful-stop timeout.
+- `tests/test_systemd_unit.py` — статические проверки unit, source entry path, внешнего env, unbuffered journald output, restart/shutdown semantics и отсутствия secret/background/daemonization/cron.
+
+Systemd только supervises existing foreground scheduler; Python scheduler/runtime logic не изменялись. Automated verification завершена: **474 tests OK**; `systemd-analyze verify deploy/systemd/weather-alert-bot.service` успешен.
+
+Controlled real validation полностью завершена: unit установлен, daemon-reload выполнен, enable/start подтверждены (`enabled`, `active`), restart подтвердил новый PID и graceful SIGTERM (`Планировщик остановлен.`, `Deactivated successfully`), обновлённый unit с `PYTHONUNBUFFERED=1` подтвердил немедленный start diagnostic в journald, explicit stop/start подтверждены, reboot/autostart подтверждены, а current-boot service остался `active (running)` с process `/usr/bin/python3 -m weather_alert_bot --run-scheduler` и journal `Started ...` / `Планировщик запущен.`.
+
+Stage закрыт без утверждения distributed/exactly-once свойств. Env-файл не читается в docs и не добавляется в Git. `technical_spec.md` unchanged, `next_steps.md` отсутствует; следующий архитектурный этап самостоятельно не выбирать.

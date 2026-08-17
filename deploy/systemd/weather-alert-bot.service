@@ -1,0 +1,22 @@
+[Unit]
+Description=Weather Alert Bot permanent foreground scheduler
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/projects/test
+EnvironmentFile=/root/.config/weather-alert-bot/env
+# The project is run from its source checkout; this is the existing module entry path.
+Environment=PYTHONPATH=/root/projects/test/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m weather_alert_bot --run-scheduler
+# Restart only after an unexpected non-zero exit or signal; 30s avoids a restart loop.
+Restart=on-failure
+RestartSec=30s
+# The application handles SIGTERM and exits after its current synchronous tick.
+KillSignal=SIGTERM
+TimeoutStopSec=90s
+
+[Install]
+WantedBy=multi-user.target
